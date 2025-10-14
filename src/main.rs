@@ -379,9 +379,13 @@ fn start_recording_session(
     let mut transcription_started = false;
 
     // For continuous transcription during recording
-    // Re-transcribe all audio every 2 seconds for better accuracy (Whisper needs context)
+    // Re-transcribe recent audio every 2 seconds for better accuracy (Whisper needs context)
+    // Cap transcription window to prevent quadratic growth with long recordings
     let transcription_interval = std::time::Duration::from_millis(2000);
     let mut last_transcription = std::time::Instant::now();
+    // Maximum audio window to transcribe (in chunks)
+    // With 1024 samples per chunk at 16kHz: ~30 seconds = 469 chunks
+    const MAX_TRANSCRIPTION_CHUNKS: usize = 470;
     let transcriber_clone = Arc::clone(&transcriber);
     let ui_tx_for_transcription = ui_tx.clone();
     let accumulated_text_clone = Arc::clone(&accumulated_text);
@@ -431,13 +435,27 @@ fn start_recording_session(
                             ));
                         }
 
-                        // Continuous transcription - re-transcribe ALL audio for accuracy
+                        // Continuous transcription - re-transcribe recent audio for live preview
+                        // Cap to MAX_TRANSCRIPTION_CHUNKS to prevent quadratic growth
+                        // Note: This is just for preview - final transcription uses all audio
                         if last_transcription.elapsed() >= transcription_interval && !recorded_audio.is_empty() {
-                            log::info!("Re-transcribing all {} chunks for accuracy", recorded_audio.len());
+                            let chunks_to_transcribe = recorded_audio.len().min(MAX_TRANSCRIPTION_CHUNKS);
+                            let start_chunk = recorded_audio.len().saturating_sub(chunks_to_transcribe);
+
+                            log::info!(
+                                "Re-transcribing {} of {} total chunks (last ~{:.1}s) for live preview",
+                                chunks_to_transcribe,
+                                recorded_audio.len(),
+                                (chunks_to_transcribe * 1024) as f32 / 16000.0
+                            );
                             last_transcription = std::time::Instant::now();
 
-                            // Clone all accumulated audio for transcription
-                            let audio_flat: Vec<f32> = recorded_audio.iter().flatten().copied().collect();
+                            // Clone only the recent audio window for transcription
+                            let audio_flat: Vec<f32> = recorded_audio[start_chunk..]
+                                .iter()
+                                .flatten()
+                                .copied()
+                                .collect();
                             let transcriber_ref = Arc::clone(&transcriber_clone);
                             let ui_tx_transcribe = ui_tx_for_transcription.clone();
                             let text_accumulator = Arc::clone(&accumulated_text_clone);
@@ -460,12 +478,12 @@ fn start_recording_session(
                                     text.push_str(segment.trim());
                                 }) {
                                     Ok(_) => {
-                                        let complete_text = full_text.lock().unwrap().clone();
-                                        if !complete_text.is_empty() {
-                                            // Replace accumulated text with the complete re-transcription
-                                            *text_accumulator.lock().unwrap() = complete_text.clone();
-                                            log::info!("Complete transcription: '{}'", complete_text);
-                                            let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(complete_text));
+                                        let preview_text = full_text.lock().unwrap().clone();
+                                        if !preview_text.is_empty() {
+                                            // Update accumulated text with preview (will be replaced by final transcription)
+                                            *text_accumulator.lock().unwrap() = preview_text.clone();
+                                            log::info!("Live preview transcription: '{}'", preview_text);
+                                            let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(preview_text));
                                         }
                                     }
                                     Err(e) => {
@@ -486,13 +504,27 @@ fn start_recording_session(
                             rms as f64,
                         ));
 
-                        // Continue transcription during pauses - re-transcribe ALL audio for accuracy
+                        // Continue transcription during pauses - re-transcribe recent audio for live preview
+                        // Cap to MAX_TRANSCRIPTION_CHUNKS to prevent quadratic growth
+                        // Note: This is just for preview - final transcription uses all audio
                         if last_transcription.elapsed() >= transcription_interval && !recorded_audio.is_empty() {
-                            log::info!("Re-transcribing all {} chunks during pause", recorded_audio.len());
+                            let chunks_to_transcribe = recorded_audio.len().min(MAX_TRANSCRIPTION_CHUNKS);
+                            let start_chunk = recorded_audio.len().saturating_sub(chunks_to_transcribe);
+
+                            log::info!(
+                                "Re-transcribing {} of {} chunks during pause (last ~{:.1}s) for live preview",
+                                chunks_to_transcribe,
+                                recorded_audio.len(),
+                                (chunks_to_transcribe * 1024) as f32 / 16000.0
+                            );
                             last_transcription = std::time::Instant::now();
 
-                            // Clone all accumulated audio for transcription
-                            let audio_flat: Vec<f32> = recorded_audio.iter().flatten().copied().collect();
+                            // Clone only the recent audio window for transcription
+                            let audio_flat: Vec<f32> = recorded_audio[start_chunk..]
+                                .iter()
+                                .flatten()
+                                .copied()
+                                .collect();
                             let transcriber_ref = Arc::clone(&transcriber_clone);
                             let ui_tx_transcribe = ui_tx_for_transcription.clone();
                             let text_accumulator = Arc::clone(&accumulated_text_clone);
@@ -515,12 +547,12 @@ fn start_recording_session(
                                     text.push_str(segment.trim());
                                 }) {
                                     Ok(_) => {
-                                        let complete_text = full_text.lock().unwrap().clone();
-                                        if !complete_text.is_empty() {
-                                            // Replace accumulated text with the complete re-transcription
-                                            *text_accumulator.lock().unwrap() = complete_text.clone();
-                                            log::info!("Complete transcription during pause: '{}'", complete_text);
-                                            let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(complete_text));
+                                        let preview_text = full_text.lock().unwrap().clone();
+                                        if !preview_text.is_empty() {
+                                            // Update accumulated text with preview (will be replaced by final transcription)
+                                            *text_accumulator.lock().unwrap() = preview_text.clone();
+                                            log::info!("Live preview transcription during pause: '{}'", preview_text);
+                                            let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(preview_text));
                                         }
                                     }
                                     Err(e) => {
@@ -557,53 +589,51 @@ fn start_recording_session(
 
     // Audio stream cleanup happens automatically in the background thread
 
-    // Get final transcription result
-    let final_text = accumulated_text.lock().unwrap().clone();
+    // Get final transcription result by transcribing ALL audio one final time
+    // This ensures accuracy even for recordings longer than the rolling window
+    if !recorded_audio.is_empty() {
+        log::info!("Performing final transcription of all {} chunks", recorded_audio.len());
+        let audio_flat: Vec<f32> = recorded_audio.into_iter().flatten().collect();
 
-    if final_text.is_empty() {
-        // No text yet, do one final transcription
-        if !recorded_audio.is_empty() {
-            log::info!("Performing final transcription of {} chunks", recorded_audio.len());
-            let audio_flat: Vec<f32> = recorded_audio.into_iter().flatten().collect();
-
-            match transcriber.transcribe(&audio_flat) {
-                Ok(result) => {
-                    let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
-                    if !cleaned.is_empty() {
-                        let _ = ui_tx.send_blocking(UIMessage::SetText(cleaned.clone()));
-                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-                            TranscriptionState::Reviewing,
-                            "Ready to send".to_string(),
-                            0.0,
-                        ));
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
-                    log::error!("Final transcription failed: {}", e);
+        match transcriber.transcribe(&audio_flat) {
+            Ok(result) => {
+                let final_text = result.replace("[BLANK_AUDIO]", "").trim().to_string();
+                if !final_text.is_empty() {
+                    let _ = ui_tx.send_blocking(UIMessage::SetText(final_text.clone()));
+                    let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                        TranscriptionState::Reviewing,
+                        "Ready to send".to_string(),
+                        0.0,
+                    ));
+                    return Ok(());
                 }
             }
+            Err(e) => {
+                log::error!("Final transcription failed: {}", e);
+            }
         }
+    }
 
-        // Still no text - show error
+    // Check if we have any preview text as fallback
+    let preview_text = accumulated_text.lock().unwrap().clone();
+    if !preview_text.is_empty() {
+        let _ = ui_tx.send_blocking(UIMessage::SetText(preview_text));
         let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-            TranscriptionState::Error,
-            "No speech detected".to_string(),
+            TranscriptionState::Reviewing,
+            "Ready to send".to_string(),
             0.0,
         ));
-        thread::sleep(std::time::Duration::from_secs(2));
-        let _ = ui_tx.send_blocking(UIMessage::Close);
         return Ok(());
     }
 
-    // Show final result in dialog for review
-    let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));
+    // Still no text - show error
     let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-        TranscriptionState::Reviewing,
-        "Ready to send".to_string(),
+        TranscriptionState::Error,
+        "No speech detected".to_string(),
         0.0,
     ));
-
+    thread::sleep(std::time::Duration::from_secs(2));
+    let _ = ui_tx.send_blocking(UIMessage::Close);
     Ok(())
 }
 
