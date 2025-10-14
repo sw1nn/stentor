@@ -608,12 +608,13 @@ fn start_recording_session(
 }
 
 fn execute_output_command(command_template: &str, text: &str) {
-    let command = command_template.replace("{transcription}", text);
-    log::info!("Executing command: {}", command);
+    log::info!("Executing command: {}", command_template);
 
+    // Pass transcription via environment variable to prevent shell injection
     match std::process::Command::new("sh")
         .arg("-c")
-        .arg(&command)
+        .arg(command_template)
+        .env("TRANSCRIPTION", text)
         .output()
     {
         Ok(output) => {
