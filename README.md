@@ -25,17 +25,17 @@ systemctl --user status sw1nn-transcription.service
 
 Copy the sample configuration:
 ```bash
-mkdir -p ~/.config/sw1nn-transcription
-cp /usr/share/doc/sw1nn-transcription/config.toml.sample ~/.config/sw1nn-transcription/config.toml
+mkdir -p ${XDG_CONFIG_HOME:-~/.config}/stentor
+cp /usr/share/doc/sw1nn-transcription/config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 ```
 
-Edit `~/.config/sw1nn-transcription/config.toml` to customize settings.
+Edit `${XDG_CONFIG_HOME}/stentor/config.toml` to customize settings.
 
 ## Usage
 
 Once the daemon is running, trigger transcription:
 ```bash
-sw1nn-transcribe start
+stentorctl start
 ```
 
 The daemon will:

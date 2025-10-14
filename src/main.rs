@@ -23,9 +23,9 @@ use dialog::{TranscriptionDialog, TranscriptionState};
 use transcription::Transcriber;
 
 #[derive(Parser)]
-#[command(name = "sw1nn-transcription-daemon")]
+#[command(name = "stentord")]
 #[command(about = "Real-time transcription daemon", long_about = None)]
-#[command(after_help = "Configuration can be set in $XDG_CONFIG_HOME/sw1nn-transcription/config.toml.\nCommand-line arguments override config file settings.")]
+#[command(after_help = "Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.\nCommand-line arguments override config file settings.")]
 struct Cli {
     /// Whisper model size
     #[arg(long, value_parser = ["tiny", "base", "small", "medium", "large"])]
@@ -35,7 +35,7 @@ struct Cli {
     #[arg(long)]
     language: Option<String>,
 
-    /// Unix socket path (default: $XDG_RUNTIME_DIR/sw1nn-transcription.sock)
+    /// Unix socket path (default: $XDG_RUNTIME_DIR/stentor.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
 

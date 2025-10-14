@@ -54,14 +54,14 @@ fn default_min_speech_duration() -> f32 {
 }
 
 fn default_socket_name() -> String {
-    "sw1nn-transcription.sock".to_string()
+    "stentor.sock".to_string()
 }
 
 
 impl Config {
     /// Load configuration from XDG config directory
     pub fn load() -> Result<Self> {
-        let xdg_dirs = BaseDirectories::with_prefix("sw1nn-transcription")
+        let xdg_dirs = BaseDirectories::with_prefix("stentor")
             .context("Failed to initialize XDG directories")?;
 
         // Try to find config file
@@ -88,7 +88,7 @@ impl Config {
     /// Get the path to the config file (creates directory if needed)
     #[allow(dead_code)]
     pub fn config_path() -> Result<PathBuf> {
-        let xdg_dirs = BaseDirectories::with_prefix("sw1nn-transcription")
+        let xdg_dirs = BaseDirectories::with_prefix("stentor")
             .context("Failed to initialize XDG directories")?;
 
         xdg_dirs
@@ -136,7 +136,7 @@ mod tests {
         assert_eq!(config.silence_threshold, 0.01);
         assert_eq!(config.min_speech_duration, 0.5);
         assert!(config.output_command.is_none());
-        assert_eq!(config.socket_name, "sw1nn-transcription.sock");
+        assert_eq!(config.socket_name, "stentor.sock");
     }
 
     #[test]

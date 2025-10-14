@@ -16,7 +16,7 @@
 - ✅ Model downloads automatically with progress bar if not present
 - ✅ Client can connect to daemon via Unix socket
 - ✅ Dialog window opens on "start" command
-- ✅ Configuration loads from `~/.config/sw1nn-transcription/config.toml`
+- ✅ Configuration loads from `${XDG_CONFIG_HOME}/stentor/config.toml`
 - ✅ CLI arguments override config file settings
 
 ## 🚧 To Be Implemented

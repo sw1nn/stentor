@@ -12,7 +12,7 @@ No manual setup required - just configure your preferred model and the daemon wi
 
 Models are stored in GGML format at:
 ```
-~/.local/share/whisper/ggml-{model_size}.bin
+${XDG_DATA_HOME}/whisper/ggml-{model_size}.bin
 ```
 
 ## Available Models
@@ -27,8 +27,8 @@ Models are stored in GGML format at:
 
 If you prefer to download models manually (e.g., for offline use):
 ```bash
-mkdir -p ~/.local/share/whisper
-cd ~/.local/share/whisper
+mkdir -p ${XDG_DATA_HOME:-~/.local/share}/whisper
+cd ${XDG_DATA_HOME:-~/.local/share}/whisper
 
 # Download tiny model (fastest)
 wget https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
@@ -44,7 +44,7 @@ Manual downloads are stored in the same location as automatic downloads, so the 
 
 ## Configuration
 
-Set the model in your config file (`~/.config/sw1nn-transcription/config.toml`):
+Set the model in your config file (`${XDG_CONFIG_HOME}/stentor/config.toml`):
 ```toml
 model = "base"  # or "tiny", "small", "medium", "large"
 language = "en"  # or "auto" for automatic detection

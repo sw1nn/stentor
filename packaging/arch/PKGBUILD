@@ -13,7 +13,7 @@ conflicts=('sw1nn-transcription-git')
 source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver"
   "sw1nn-transcription.service")
 sha256sums=('SKIP'
-  '942db05b1aeab900daf044dc860bb2e70ac3765068d05b2d0ec912b6c537aa3a')
+  '33537f382be6862db7208ac257445c77d891b199d74cf9a13bdf2e08da6ded24')
 
 prepare() {
   cd "$srcdir/$pkgname"
@@ -50,8 +50,8 @@ package() {
   cd "$srcdir/$pkgname"
 
   # Install binaries
-  install -Dm755 "target/release/sw1nn-transcription-daemon" "$pkgdir/usr/bin/sw1nn-transcription-daemon"
-  install -Dm755 "target/release/sw1nn-transcribe" "$pkgdir/usr/bin/sw1nn-transcribe"
+  install -Dm755 "target/release/stentord" "$pkgdir/usr/bin/stentord"
+  install -Dm755 "target/release/stentorctl" "$pkgdir/usr/bin/stentorctl"
 
   # Install systemd user service
   install -Dm644 "$srcdir/sw1nn-transcription.service" "$pkgdir/usr/lib/systemd/user/sw1nn-transcription.service"

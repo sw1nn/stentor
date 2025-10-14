@@ -5,7 +5,7 @@ After=graphical-session.target
 
 [Service]
 Type=exec
-ExecStart=/usr/bin/sw1nn-transcription-daemon
+ExecStart=/usr/bin/stentord
 Restart=on-failure
 RestartSec=5
 KillMode=mixed

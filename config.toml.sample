@@ -1,5 +1,5 @@
-# transcription-rs configuration file
-# Place this file at: ~/.config/sw1nn-transcription/config.toml
+# Stentor configuration file
+# Place this file at: ${XDG_CONFIG_HOME}/stentor/config.toml
 
 [daemon]
 # Whisper model size: tiny, base, small, medium, large
@@ -33,4 +33,4 @@ language = "en"
 # output-command = "xclip -selection clipboard"
 
 # Unix socket filename (created in $XDG_RUNTIME_DIR)
-#socket-name = "sw1nn-transcription.sock"
+#socket-name = "stentor.sock"

@@ -1,18 +1,18 @@
 [package]
-name = "sw1nn-transcription"
+name = "stentor"
 version = "0.3.0"
 edition = "2021"
 authors = ["Neale Swinnerton <neale@sw1nn.com>"]
 description = "Real-time voice transcription with Whisper"
 license = "GPL-3.0"
-default-run = "sw1nn-transcription-daemon"
+default-run = "stentord"
 
 [[bin]]
-name = "sw1nn-transcription-daemon"
+name = "stentord"
 path = "src/main.rs"
 
 [[bin]]
-name = "sw1nn-transcribe"
+name = "stentorctl"
 path = "src/bin/client.rs"
 
 [dependencies]
