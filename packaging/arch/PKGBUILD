@@ -1,0 +1,55 @@
+# Maintainer: Neale Swinnerton <neale@sw1nn.com>
+pkgname=sw1nn-transcription
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Real-time voice transcription with Whisper"
+arch=('x86_64')
+url="https://github.com/sw1nn/transcription-rs"
+license=('GPL3')
+depends=('gtk4' 'libadwaita' 'alsa-lib')
+makedepends=('cargo' 'git')
+options=('!lto')
+source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#branch=main")
+sha256sums=('SKIP')
+
+prepare() {
+  cd "$srcdir/$pkgname"
+  export CARGO_HOME="$srcdir/cargo-home"
+  cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+  cd "$srcdir/$pkgname"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_HOME="$srcdir/cargo-home"
+  # Unset CARGO_TARGET_DIR to use local target directory
+  unset CARGO_TARGET_DIR
+  # Remove LTO flags that interfere with whisper's native compilation
+  export CFLAGS="${CFLAGS//-flto=auto/}"
+  export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
+  # Override Cargo.toml profile settings that cause linking issues in makepkg
+  export CARGO_PROFILE_RELEASE_LTO=false
+  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
+  # Force use of gcc linker instead of lld
+  export RUSTFLAGS="-C linker=gcc"
+  cargo build --frozen --release
+}
+
+# Tests disabled - require runtime environment
+# check() {
+#   cd "$srcdir/$pkgname"
+#   export RUSTUP_TOOLCHAIN=stable
+#   export CARGO_HOME="$srcdir/cargo-home"
+#   cargo test --frozen --release
+# }
+
+package() {
+  cd "$srcdir/$pkgname"
+
+  # Install binaries
+  install -Dm755 "target/release/sw1nn-transcription-daemon" "$pkgdir/usr/bin/sw1nn-transcription-daemon"
+  install -Dm755 "target/release/sw1nn-transcribe" "$pkgdir/usr/bin/sw1nn-transcribe"
+
+  # Install sample config
+  install -Dm644 "config.toml.sample" "$pkgdir/usr/share/doc/$pkgname/config.toml.sample"
+}
