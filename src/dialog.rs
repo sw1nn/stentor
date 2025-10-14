@@ -370,6 +370,7 @@ impl TranscriptionDialog {
     }
 
     pub fn set_text_preview(&self, text: &str) {
+        log::info!("Setting text preview: '{}'", text);
         self.text_preview.set_text(text);
     }
 
