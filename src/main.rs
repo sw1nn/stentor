@@ -167,7 +167,7 @@ async fn main() -> Result<()> {
                         let mut dialog = TranscriptionDialog::new(&app_clone);
 
                         // Get source info
-                        let source_name = match AudioRecorder::new(16000, config_clone.silence_threshold, source.clone()) {
+                        let source_name = match AudioRecorder::new(16000, source.clone()) {
                             Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
                             Err(_) => "Default".to_string(),
                         };
@@ -331,7 +331,7 @@ fn start_recording_session(
     };
 
     // Create audio recorder with optional source selection
-    let recorder = AudioRecorder::new(16000, config.silence_threshold, source)?;
+    let recorder = AudioRecorder::new(16000, source)?;
 
     // Get the ACTUAL sample rate the device is using (not what we requested)
     let actual_sample_rate = recorder.get_actual_sample_rate()?;

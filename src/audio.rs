@@ -14,7 +14,6 @@ use std::sync::{Arc, Mutex};
 pub struct AudioRecorder {
     source_name: Option<String>,
     sample_rate: u32,
-    silence_threshold: f32,
 }
 
 #[derive(Debug, Clone)]
@@ -28,7 +27,7 @@ pub enum RecordingCommand {
 }
 
 impl AudioRecorder {
-    pub fn new(sample_rate: u32, silence_threshold: f32, source_name: Option<String>) -> Result<Self> {
+    pub fn new(sample_rate: u32, source_name: Option<String>) -> Result<Self> {
         // Validate that the source exists if specified
         if let Some(ref name) = source_name {
             log::info!("Looking for audio source: {}", name);
@@ -46,7 +45,6 @@ impl AudioRecorder {
         Ok(Self {
             source_name,
             sample_rate,
-            silence_threshold,
         })
     }
 
