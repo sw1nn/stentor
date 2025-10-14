@@ -3,7 +3,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, SegmentCallbackData};
 
 pub struct Transcriber {
     context: WhisperContext,
@@ -175,6 +175,80 @@ impl Transcriber {
         Ok(())
     }
 
+    /// Transcribe audio data with a callback for real-time segment updates
+    ///
+    /// Audio should be mono, 16kHz sample rate, f32 format
+    /// The callback is called in real-time as each segment is decoded during transcription
+    pub fn transcribe_with_realtime_callback<F>(&self, audio_data: &[f32], mut callback: F) -> Result<String>
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        // Redirect stderr to suppress verbose whisper.cpp output
+        use std::os::unix::io::AsRawFd;
+        let stderr_fd = std::io::stderr().as_raw_fd();
+        let saved_stderr = unsafe { libc::dup(stderr_fd) };
+
+        // Redirect stderr to /dev/null
+        let dev_null = std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .context("Failed to open /dev/null")?;
+        unsafe {
+            libc::dup2(dev_null.as_raw_fd(), stderr_fd);
+        }
+
+        // Create state
+        let mut state = self
+            .context
+            .create_state()
+            .context("Failed to create Whisper state")?;
+
+        // Configure transcription parameters
+        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+
+        // Set language if specified
+        if let Some(ref lang) = self.language {
+            params.set_language(Some(lang));
+        }
+
+        // Disable printing to console
+        params.set_print_progress(false);
+        params.set_print_realtime(false);
+        params.set_print_timestamps(false);
+
+        // Set up real-time segment callback
+        params.set_segment_callback_safe(move |segment_data: SegmentCallbackData| {
+            callback(&segment_data.text);
+        });
+
+        // Process audio
+        let result = state
+            .full(params, audio_data)
+            .context("Failed to transcribe audio");
+
+        // Restore stderr
+        unsafe {
+            libc::dup2(saved_stderr, stderr_fd);
+            libc::close(saved_stderr);
+        }
+
+        result?;
+
+        // Extract complete transcribed text
+        let num_segments = state.full_n_segments();
+
+        let mut text = String::new();
+        for i in 0..num_segments {
+            if let Some(segment) = state.get_segment(i) {
+                if let Ok(segment_text) = segment.to_str_lossy() {
+                    text.push_str(&segment_text);
+                }
+            }
+        }
+
+        Ok(text.trim().to_string())
+    }
+
     /// Transcribe audio data with a callback for progressive updates
     ///
     /// Audio should be mono, 16kHz sample rate, f32 format
@@ -230,15 +304,15 @@ impl Transcriber {
         result?;
 
         // Extract transcribed text and call callback for each segment
-        let num_segments = state
-            .full_n_segments()
-            .context("Failed to get number of segments")?;
+        let num_segments = state.full_n_segments();
 
         let mut text = String::new();
         for i in 0..num_segments {
-            if let Ok(segment_text) = state.full_get_segment_text(i) {
-                callback(&segment_text);
-                text.push_str(&segment_text);
+            if let Some(segment) = state.get_segment(i) {
+                if let Ok(segment_text) = segment.to_str_lossy() {
+                    callback(&segment_text);
+                    text.push_str(&segment_text);
+                }
             }
         }
 
@@ -297,14 +371,14 @@ impl Transcriber {
         result?;
 
         // Extract transcribed text
-        let num_segments = state
-            .full_n_segments()
-            .context("Failed to get number of segments")?;
+        let num_segments = state.full_n_segments();
 
         let mut text = String::new();
         for i in 0..num_segments {
-            if let Ok(segment_text) = state.full_get_segment_text(i) {
-                text.push_str(&segment_text);
+            if let Some(segment) = state.get_segment(i) {
+                if let Ok(segment_text) = segment.to_str_lossy() {
+                    text.push_str(&segment_text);
+                }
             }
         }
 

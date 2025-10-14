@@ -27,7 +27,7 @@ hound = "3.5"
 libpulse-binding = "2.28"
 
 # Transcription
-whisper-rs = "0.12"
+whisper-rs = "0.15"
 
 # HTTP client for downloading models
 reqwest = { version = "0.12", features = ["blocking", "stream"] }
