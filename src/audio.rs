@@ -25,12 +25,27 @@ pub enum RecordingCommand {
 }
 
 impl AudioRecorder {
-    pub fn new(sample_rate: u32, silence_threshold: f32) -> Result<Self> {
+    pub fn new(sample_rate: u32, silence_threshold: f32, device_name: Option<String>) -> Result<Self> {
         let host = cpal::default_host();
 
-        let device = host
-            .default_input_device()
-            .context("No input device available")?;
+        let device = if let Some(name) = device_name {
+            // Find device by name
+            log::info!("Looking for audio device: {}", name);
+            host.input_devices()
+                .context("Failed to enumerate input devices")?
+                .find(|d| {
+                    if let Ok(device_name) = d.name() {
+                        device_name == name
+                    } else {
+                        false
+                    }
+                })
+                .with_context(|| format!("Audio device '{}' not found", name))?
+        } else {
+            // Use default device
+            host.default_input_device()
+                .context("No input device available")?
+        };
 
         log::info!("Using audio device: {}", device.name()?);
 
@@ -156,9 +171,8 @@ impl AudioRecorder {
 
 pub struct VoiceActivityDetector {
     silence_threshold: f32,
-    silence_duration: f32,
     min_speech_duration: f32,
-    stop_silence_duration: f32,  // Longer silence duration to trigger stop
+    stop_silence_duration: f32,  // Silence duration to trigger stop
     sample_rate: u32,
     samples_per_chunk: usize,
 }
@@ -180,14 +194,12 @@ pub struct VadResult {
 impl VoiceActivityDetector {
     pub fn new(
         silence_threshold: f32,
-        silence_duration: f32,
         min_speech_duration: f32,
         stop_silence_duration: f32,
         sample_rate: u32,
     ) -> Self {
         Self {
             silence_threshold,
-            silence_duration,
             min_speech_duration,
             stop_silence_duration,
             sample_rate,
@@ -202,9 +214,6 @@ impl VoiceActivityDetector {
         silence_chunks: usize,
         speech_chunks: usize,
     ) -> VadResult {
-        let silence_chunk_threshold =
-            (self.silence_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
-                as usize;
         let stop_silence_chunk_threshold =
             (self.stop_silence_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
                 as usize;
@@ -374,7 +383,7 @@ mod tests {
 
     #[test]
     fn test_vad_idle_to_speaking() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
         let result = vad.process_chunk(0.05, VadState::Idle, 0, 0);
         assert_eq!(result.state, VadState::Speaking);
         assert!(!result.should_stop);
@@ -382,7 +391,7 @@ mod tests {
 
     #[test]
     fn test_vad_speaking_to_silence() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
         let result = vad.process_chunk(0.005, VadState::Speaking, 0, 10);
         assert_eq!(result.state, VadState::SilenceAfterSpeech);
         assert!(!result.should_stop);

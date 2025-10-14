@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
-use stentor::config::Config;
+use stentor::config::{ClientConfig, Config};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -17,8 +17,11 @@ Examples:
   # Start recording
   stentorctl start
 
-  # Start recording and unmute microphone
-  stentorctl start --unmute-mic
+  # Start recording and unmute source
+  stentorctl start --unmute-source
+
+  # Start recording with specific source
+  stentorctl start --source=alsa_input.usb
 
   # Stop recording and transcribe
   stentorctl stop
@@ -32,9 +35,13 @@ struct Cli {
     #[arg(value_parser = ["start", "stop", "quit"], default_value = "start")]
     command: Option<String>,
 
-    /// Unmute microphone before recording (only applies to 'start' command)
+    /// Unmute source before recording (only applies to 'start' command)
     #[arg(long)]
-    unmute_mic: bool,
+    unmute_source: bool,
+
+    /// Audio source to use (default: from config or PulseAudio default)
+    #[arg(long)]
+    source: Option<String>,
 
     /// Unix socket path (default: from config or $XDG_RUNTIME_DIR/stentor.sock)
     #[arg(long)]
@@ -47,8 +54,9 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Load config to get socket path
+    // Load configs to get socket path and client settings
     let config = Config::load().context("Failed to load configuration")?;
+    let client_config = ClientConfig::load().context("Failed to load client configuration")?;
 
     let socket_path = if let Some(custom_socket) = cli.socket {
         custom_socket
@@ -68,8 +76,20 @@ async fn main() -> Result<()> {
 
     // Send command
     let command = cli.command.unwrap_or_else(|| "start".to_string());
-    let command_str = if command == "start" && cli.unmute_mic {
-        format!("{} --unmute-mic\n", command)
+    let command_str = if command == "start" {
+        let mut cmd_parts = vec![command.clone()];
+
+        if cli.unmute_source {
+            cmd_parts.push("--unmute-source".to_string());
+        }
+
+        // Use CLI source if specified, otherwise fall back to config
+        let source = cli.source.or(client_config.source);
+        if let Some(src) = source {
+            cmd_parts.push(format!("--source={}", src));
+        }
+
+        format!("{}\n", cmd_parts.join(" "))
     } else {
         format!("{}\n", command)
     };

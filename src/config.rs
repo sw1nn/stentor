@@ -7,6 +7,22 @@ use xdg::BaseDirectories;
 pub struct ConfigFile {
     #[serde(default)]
     pub daemon: Config,
+    #[serde(default)]
+    pub client: ClientConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientConfig {
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self {
+            source: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,6 +87,28 @@ fn default_socket_name() -> String {
     "stentor.sock".to_string()
 }
 
+
+impl ClientConfig {
+    /// Load client configuration from XDG config directory
+    #[allow(dead_code)] // Used in client binary
+    pub fn load() -> Result<Self> {
+        let xdg_dirs = BaseDirectories::with_prefix("stentor");
+
+        // Try to find config file
+        if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
+            let contents = std::fs::read_to_string(&config_path)
+                .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+
+            let config_file: ConfigFile = toml::from_str(&contents)
+                .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+
+            Ok(config_file.client)
+        } else {
+            log::info!("No config file found, using defaults");
+            Ok(Self::default())
+        }
+    }
+}
 
 impl Config {
     /// Load configuration from XDG config directory

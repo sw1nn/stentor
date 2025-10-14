@@ -114,7 +114,7 @@ impl TranscriptionDialog {
 
         // Microphone info label (right-aligned in status bar)
         let mic_label = Label::new(None);
-        mic_label.set_markup("<small><span foreground='#888888'>Detecting microphone...</span></small>");
+        mic_label.set_markup("<small><span foreground='#888888'>Detecting source...</span></small>");
         mic_label.set_xalign(1.0);  // Right align
         mic_label.set_hexpand(true);
         status_box.append(&mic_label);
@@ -337,7 +337,7 @@ impl TranscriptionDialog {
         }
     }
 
-    pub fn set_microphone_info(&self, device_name: &str) {
+    pub fn set_source_info(&self, device_name: &str) {
         // Check if device name starts with "default"
         let is_default = device_name.to_lowercase().starts_with("default");
 

@@ -4,23 +4,23 @@ use libpulse_binding::mainloop::standard::{IterateResult, Mainloop};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-/// Manages microphone mute state using libpulse (PulseAudio/PipeWire)
-pub struct MicMuteManager {
+/// Manages source mute state using libpulse (PulseAudio/PipeWire)
+pub struct SourceMuteManager {
     was_muted: bool,
     source_index: Option<u32>,
 }
 
-impl MicMuteManager {
-    /// Check if mic is muted and unmute it if requested
+impl SourceMuteManager {
+    /// Check if source is muted and unmute it if requested
     /// Returns a manager that will restore the original state on drop
     pub fn unmute_if_needed() -> Result<Self> {
         let (source_index, was_muted) = Self::get_default_source_info()?;
 
         if was_muted {
-            log::info!("Microphone was muted, unmuting for recording");
+            log::info!("Source was muted, unmuting for recording");
             Self::set_mute(source_index, false)?;
         } else {
-            log::debug!("Microphone was already unmuted");
+            log::debug!("Source was already unmuted");
         }
 
         Ok(Self {
@@ -29,10 +29,10 @@ impl MicMuteManager {
         })
     }
 
-    /// Get the default audio source (microphone) index and mute state
+    /// Get the default audio source index and mute state
     fn get_default_source_info() -> Result<(u32, bool)> {
         let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-        let mut context = PulseContext::new(&mainloop, "stentor-mic-query")
+        let mut context = PulseContext::new(&mainloop, "stentor-source-query")
             .context("Failed to create PulseAudio context")?;
 
         context
@@ -141,7 +141,7 @@ impl MicMuteManager {
     /// Set mute state for the source
     fn set_mute(source_index: u32, mute: bool) -> Result<()> {
         let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-        let mut context = PulseContext::new(&mainloop, "stentor-mic-mute")
+        let mut context = PulseContext::new(&mainloop, "stentor-source-mute")
             .context("Failed to create PulseAudio context")?;
 
         context
@@ -194,17 +194,17 @@ impl MicMuteManager {
     }
 }
 
-impl Drop for MicMuteManager {
+impl Drop for SourceMuteManager {
     fn drop(&mut self) {
         // Restore original mute state
         if let Some(source_index) = self.source_index {
             if self.was_muted {
-                log::info!("Restoring microphone to muted state");
+                log::info!("Restoring source to muted state");
                 if let Err(e) = Self::set_mute(source_index, true) {
                     log::error!("Failed to restore mute state: {}", e);
                 }
             } else {
-                log::debug!("Microphone was not muted originally, leaving unmuted");
+                log::debug!("Source was not muted originally, leaving unmuted");
             }
         }
     }

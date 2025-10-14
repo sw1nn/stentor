@@ -14,14 +14,14 @@ mod config;
 mod daemon;
 mod dialog;
 mod keyboard;
-mod mic_mute;
+mod source_mute;
 mod transcription;
 
 use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use config::Config;
 use daemon::{DaemonCommand, DaemonServer};
 use dialog::{TranscriptionDialog, TranscriptionState};
-use mic_mute::MicMuteManager;
+use source_mute::SourceMuteManager;
 use transcription::Transcriber;
 
 #[derive(Parser)]
@@ -166,19 +166,19 @@ async fn main() -> Result<()> {
             log::info!("Processing command: {:?}", command);
 
             match command {
-                DaemonCommand::Start { unmute_mic } => {
+                DaemonCommand::Start { unmute_source, source } => {
                     let mut dialog_lock = current_dialog_clone.lock().unwrap();
 
                     if dialog_lock.is_none() {
                         // Create new dialog
                         let mut dialog = TranscriptionDialog::new(&app_clone);
 
-                        // Get microphone info
-                        let mic_name = match AudioRecorder::new(16000, config_clone.silence_threshold) {
+                        // Get source info
+                        let source_name = match AudioRecorder::new(16000, config_clone.silence_threshold, source.clone()) {
                             Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
                             Err(_) => "Default".to_string(),
                         };
-                        dialog.set_microphone_info(&mic_name);
+                        dialog.set_source_info(&source_name);
 
                         // Create UI update channel
                         let (ui_tx, ui_rx) = async_channel::unbounded::<UIMessage>();
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
                                         dialog_for_updates.set_text_preview(&text);
                                     }
                                     UIMessage::SetMicrophone(name) => {
-                                        dialog_for_updates.set_microphone_info(&name);
+                                        dialog_for_updates.set_source_info(&name);
                                     }
                                     UIMessage::Close => {
                                         log::info!("Closing dialog and cleaning up state");
@@ -267,7 +267,8 @@ async fn main() -> Result<()> {
                                 transcriber_clone,
                                 ui_tx_for_recording,
                                 stop_tx_storage.clone(),
-                                unmute_mic,
+                                unmute_source,
+                                source,
                             ) {
                                 Ok(_) => {
                                     log::info!("Recording session completed");
@@ -318,16 +319,17 @@ fn start_recording_session(
     transcriber: Arc<Transcriber>,
     ui_tx: Sender<UIMessage>,
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
-    unmute_mic: bool,
+    unmute_source: bool,
+    source: Option<String>,
 ) -> Result<()> {
     log::info!("Starting recording session");
 
-    // Unmute microphone if requested
-    let _mic_manager = if unmute_mic {
-        match MicMuteManager::unmute_if_needed() {
+    // Unmute source if requested
+    let _source_manager = if unmute_source {
+        match SourceMuteManager::unmute_if_needed() {
             Ok(manager) => Some(manager),
             Err(e) => {
-                log::warn!("Failed to manage mic mute state: {}. Continuing anyway.", e);
+                log::warn!("Failed to manage source mute state: {}. Continuing anyway.", e);
                 None
             }
         }
@@ -335,8 +337,8 @@ fn start_recording_session(
         None
     };
 
-    // Create audio recorder
-    let recorder = AudioRecorder::new(16000, config.silence_threshold)?;
+    // Create audio recorder with optional source selection
+    let recorder = AudioRecorder::new(16000, config.silence_threshold, source)?;
 
     // Get the ACTUAL sample rate the device is using (not what we requested)
     let actual_sample_rate = recorder.get_actual_sample_rate()?;
@@ -365,9 +367,8 @@ fn start_recording_session(
     );
     let vad = VoiceActivityDetector::new(
         config.silence_threshold,
-        0.5,  // Short silence duration for state transitions (not used for stopping)
         config.min_speech_duration,
-        config.silence_duration,  // Longer duration to actually stop the session
+        config.silence_duration,  // Silence duration to trigger stop
         actual_sample_rate,  // Use ACTUAL sample rate from device
     );
 

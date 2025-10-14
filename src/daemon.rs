@@ -7,7 +7,10 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
-    Start { unmute_mic: bool },
+    Start {
+        unmute_source: bool,
+        source: Option<String>,
+    },
     Stop,
     Status,
     Quit,
@@ -21,8 +24,26 @@ impl FromStr for DaemonCommand {
 
         match parts.get(0).copied() {
             Some("start") => {
-                let unmute_mic = parts.get(1) == Some(&"--unmute-mic");
-                Ok(DaemonCommand::Start { unmute_mic })
+                let mut unmute_source = false;
+                let mut source = None;
+
+                // Parse optional flags
+                for part in parts.iter().skip(1) {
+                    if *part == "--unmute-source" || *part == "--unmute-mic" {
+                        // Support both for backwards compatibility
+                        unmute_source = true;
+                    } else if let Some(src) = part.strip_prefix("--source=") {
+                        source = Some(src.to_string());
+                    } else if let Some(mic) = part.strip_prefix("--microphone=") {
+                        // Support --microphone for backwards compatibility
+                        source = Some(mic.to_string());
+                    }
+                }
+
+                Ok(DaemonCommand::Start {
+                    unmute_source,
+                    source,
+                })
             }
             Some("stop") => Ok(DaemonCommand::Stop),
             Some("status") => Ok(DaemonCommand::Status),
@@ -193,8 +214,50 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        assert_eq!("start".parse::<DaemonCommand>(), Ok(DaemonCommand::Start { unmute_mic: false }));
-        assert_eq!("start --unmute-mic".parse::<DaemonCommand>(), Ok(DaemonCommand::Start { unmute_mic: true }));
+        assert_eq!(
+            "start".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: false,
+                source: None
+            })
+        );
+        assert_eq!(
+            "start --unmute-source".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: true,
+                source: None
+            })
+        );
+        // Test backwards compatibility with --unmute-mic
+        assert_eq!(
+            "start --unmute-mic".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: true,
+                source: None
+            })
+        );
+        assert_eq!(
+            "start --source=alsa_input.usb".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: false,
+                source: Some("alsa_input.usb".to_string())
+            })
+        );
+        // Test backwards compatibility with --microphone
+        assert_eq!(
+            "start --microphone=alsa_input.usb".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: false,
+                source: Some("alsa_input.usb".to_string())
+            })
+        );
+        assert_eq!(
+            "start --unmute-source --source=alsa_input.usb".parse::<DaemonCommand>(),
+            Ok(DaemonCommand::Start {
+                unmute_source: true,
+                source: Some("alsa_input.usb".to_string())
+            })
+        );
         assert_eq!("stop".parse::<DaemonCommand>(), Ok(DaemonCommand::Stop));
         assert_eq!("status".parse::<DaemonCommand>(), Ok(DaemonCommand::Status));
         assert_eq!("quit".parse::<DaemonCommand>(), Ok(DaemonCommand::Quit));
@@ -203,7 +266,14 @@ mod tests {
 
     #[test]
     fn test_command_as_str() {
-        assert_eq!(DaemonCommand::Start { unmute_mic: false }.as_str(), "start");
+        assert_eq!(
+            DaemonCommand::Start {
+                unmute_source: false,
+                source: None
+            }
+            .as_str(),
+            "start"
+        );
         assert_eq!(DaemonCommand::Stop.as_str(), "stop");
         assert_eq!(DaemonCommand::Status.as_str(), "status");
         assert_eq!(DaemonCommand::Quit.as_str(), "quit");
