@@ -1,6 +1,6 @@
 # Maintainer: Neale Swinnerton <neale@sw1nn.com>
 pkgname=sw1nn-transcription
-pkgver=0.1.0
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="Real-time voice transcription with Whisper"
 arch=('x86_64')
@@ -11,9 +11,9 @@ makedepends=('cargo' 'git')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription-git')
 source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver"
-        "sw1nn-transcription.service")
+  "sw1nn-transcription.service")
 sha256sums=('SKIP'
-            '942db05b1aeab900daf044dc860bb2e70ac3765068d05b2d0ec912b6c537aa3a')
+  '942db05b1aeab900daf044dc860bb2e70ac3765068d05b2d0ec912b6c537aa3a')
 
 prepare() {
   cd "$srcdir/$pkgname"
