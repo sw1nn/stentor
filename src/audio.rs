@@ -61,10 +61,16 @@ impl AudioRecorder {
         mainloop.lock();
         mainloop.start().context("Failed to start mainloop")?;
 
-        // Wait for context to be ready
-        loop {
+        // Wait for context to be ready (with timeout)
+        const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
+        let mut ready = false;
+
+        for _iteration in 0..MAX_ITERATIONS {
             match context.get_state() {
-                libpulse_binding::context::State::Ready => break,
+                libpulse_binding::context::State::Ready => {
+                    ready = true;
+                    break;
+                }
                 libpulse_binding::context::State::Failed
                 | libpulse_binding::context::State::Terminated => {
                     mainloop.unlock();
@@ -77,6 +83,12 @@ impl AudioRecorder {
                     mainloop.lock();
                 }
             }
+        }
+
+        if !ready {
+            mainloop.unlock();
+            mainloop.stop();
+            anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
         }
 
         let found = Rc::new(RefCell::new(false));
@@ -346,10 +358,16 @@ fn get_pulse_source_description(source_name: &str) -> Result<String> {
     mainloop.lock();
     mainloop.start().context("Failed to start mainloop")?;
 
-    // Wait for context to be ready
-    loop {
+    // Wait for context to be ready (with timeout)
+    const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
+    let mut ready = false;
+
+    for _iteration in 0..MAX_ITERATIONS {
         match context.get_state() {
-            libpulse_binding::context::State::Ready => break,
+            libpulse_binding::context::State::Ready => {
+                ready = true;
+                break;
+            }
             libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
                 mainloop.unlock();
                 mainloop.stop();
@@ -361,6 +379,12 @@ fn get_pulse_source_description(source_name: &str) -> Result<String> {
                 mainloop.lock();
             }
         }
+    }
+
+    if !ready {
+        mainloop.unlock();
+        mainloop.stop();
+        anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
     }
 
     let desc_result = Arc::new(Mutex::new(None));
@@ -402,10 +426,16 @@ fn get_pulse_default_source_description() -> Result<String> {
     mainloop.lock();
     mainloop.start().context("Failed to start mainloop")?;
 
-    // Wait for context to be ready
-    loop {
+    // Wait for context to be ready (with timeout)
+    const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
+    let mut ready = false;
+
+    for _iteration in 0..MAX_ITERATIONS {
         match context.get_state() {
-            libpulse_binding::context::State::Ready => break,
+            libpulse_binding::context::State::Ready => {
+                ready = true;
+                break;
+            }
             libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
                 mainloop.unlock();
                 mainloop.stop();
@@ -417,6 +447,12 @@ fn get_pulse_default_source_description() -> Result<String> {
                 mainloop.lock();
             }
         }
+    }
+
+    if !ready {
+        mainloop.unlock();
+        mainloop.stop();
+        anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
     }
 
     let result = Arc::new(Mutex::new(None));
