@@ -1,4 +1,4 @@
 pkg/
 src/
 *.pkg.tar.zst
-transcription-rs/
+sw1nn-transcription/

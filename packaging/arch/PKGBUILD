@@ -8,7 +8,8 @@ url="https://github.com/sw1nn/transcription-rs"
 license=('GPL3')
 depends=('gtk4' 'libadwaita' 'alsa-lib')
 makedepends=('cargo' 'git')
-options=('!lto')
+options=('!lto' '!debug')
+conflicts=('sw1nn-transcription-git')
 source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
