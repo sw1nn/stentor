@@ -1,0 +1,36 @@
+# transcription-rs configuration file
+# Place this file at: ~/.config/transcription-rs/config.toml
+
+[daemon]
+# Whisper model size: tiny, base, small, medium, large
+# Larger models are more accurate but slower and require more memory
+model = "base"
+
+# Language code for transcription (ISO 639-1)
+# Set to "auto" for automatic language detection (slower)
+language = "en"
+
+# Seconds of silence before stopping recording
+#silence-duration = 1.5
+
+# RMS threshold below which audio is considered silence
+# Lower values are more sensitive (detect quieter speech)
+# Higher values require louder speech
+#silence-threshold = 0.01
+
+# Minimum duration of speech in seconds before recording starts
+# Helps filter out brief noise
+#min-speech-duration = 0.5
+
+# Command to execute with transcribed text
+# Use {transcription} as placeholder for the transcribed text
+# Examples:
+#   - Copy to clipboard (X11): "xclip -selection clipboard"
+#   - Copy to clipboard (Wayland): "wl-copy"
+#   - Paste with xdotool: "xdotool type --clearmodifiers '{transcription}'"
+#   - Send to tmux session: "tmux send-keys -t claude -l '{transcription}' && tmux send-keys -t claude Enter"
+#     (requires a tmux session named 'claude': tmux new-session -d -s claude)
+# output-command = "xclip -selection clipboard"
+
+# Unix socket filename (created in $XDG_RUNTIME_DIR)
+#socket-name = "sw1nn-transcription.sock"
