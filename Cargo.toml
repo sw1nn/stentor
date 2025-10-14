@@ -17,12 +17,12 @@ path = "src/bin/client.rs"
 
 [dependencies]
 # UI
-gtk4 = "0.9"
-libadwaita = "0.7"
-glib = "0.20"
+gtk4 = "0.10"
+libadwaita = "0.8"
+glib = "0.21"
 
 # Audio
-cpal = "0.15"
+cpal = "0.16"
 hound = "3.5"
 
 # Transcription
@@ -30,11 +30,11 @@ whisper-rs = "0.12"
 
 # HTTP client for downloading models
 reqwest = { version = "0.12", features = ["blocking", "stream"] }
-indicatif = "0.17"
+indicatif = "0.18"
 
 # Async runtime
 tokio = { version = "1", features = ["full"] }
-async-channel = "2.3"
+async-channel = "2.5"
 
 # Config
 serde = { version = "1", features = ["derive"] }
@@ -43,9 +43,6 @@ xdg = "2.5"
 
 # CLI
 clap = { version = "4", features = ["derive"] }
-
-# Input
-evdev = "0.12"
 
 # Error handling
 anyhow = "1"
