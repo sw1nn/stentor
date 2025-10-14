@@ -75,8 +75,7 @@ fn default_socket_name() -> String {
 impl Config {
     /// Load configuration from XDG config directory
     pub fn load() -> Result<Self> {
-        let xdg_dirs = BaseDirectories::with_prefix("stentor")
-            .context("Failed to initialize XDG directories")?;
+        let xdg_dirs = BaseDirectories::with_prefix("stentor");
 
         // Try to find config file
         let config = if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
@@ -112,8 +111,7 @@ impl Config {
     /// Get the path to the config file (creates directory if needed)
     #[allow(dead_code)]
     pub fn config_path() -> Result<PathBuf> {
-        let xdg_dirs = BaseDirectories::with_prefix("stentor")
-            .context("Failed to initialize XDG directories")?;
+        let xdg_dirs = BaseDirectories::with_prefix("stentor");
 
         xdg_dirs
             .place_config_file("config.toml")
@@ -122,7 +120,7 @@ impl Config {
 
     /// Get the socket path in XDG runtime directory
     pub fn socket_path(&self) -> Result<PathBuf> {
-        let xdg_dirs = BaseDirectories::new().context("Failed to initialize XDG directories")?;
+        let xdg_dirs = BaseDirectories::new();
 
         let runtime_dir = xdg_dirs
             .get_runtime_directory()

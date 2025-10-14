@@ -57,9 +57,10 @@ impl Transcriber {
     /// Get the path to the Whisper model file, downloading if necessary
     fn get_model_path(model_size: &str) -> Result<PathBuf> {
         // Determine the target directory for models
-        let model_dir = if let Ok(xdg_dirs) = xdg::BaseDirectories::new() {
-            if let Some(data_home) = xdg_dirs.get_data_home().parent() {
-                data_home.join("whisper")
+        let xdg_dirs = xdg::BaseDirectories::new();
+        let model_dir = if let Some(data_home) = xdg_dirs.get_data_home() {
+            if let Some(parent) = data_home.parent() {
+                parent.join("whisper")
             } else {
                 PathBuf::from(std::env::var("HOME")?)
                     .join(".local")
