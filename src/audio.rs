@@ -59,6 +59,11 @@ impl AudioRecorder {
         self.device.name().context("Failed to get device name")
     }
 
+    pub fn get_actual_sample_rate(&self) -> Result<u32> {
+        let config = self.device.default_input_config()?;
+        Ok(config.sample_rate().0)
+    }
+
     pub fn start_recording(
         &self,
         chunk_tx: Sender<AudioChunk>,
@@ -142,6 +147,7 @@ pub struct VoiceActivityDetector {
     silence_threshold: f32,
     silence_duration: f32,
     min_speech_duration: f32,
+    stop_silence_duration: f32,  // Longer silence duration to trigger stop
     sample_rate: u32,
     samples_per_chunk: usize,
 }
@@ -165,12 +171,14 @@ impl VoiceActivityDetector {
         silence_threshold: f32,
         silence_duration: f32,
         min_speech_duration: f32,
+        stop_silence_duration: f32,
         sample_rate: u32,
     ) -> Self {
         Self {
             silence_threshold,
             silence_duration,
             min_speech_duration,
+            stop_silence_duration,
             sample_rate,
             samples_per_chunk: 1024,
         }
@@ -185,6 +193,9 @@ impl VoiceActivityDetector {
     ) -> VadResult {
         let silence_chunk_threshold =
             (self.silence_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
+                as usize;
+        let stop_silence_chunk_threshold =
+            (self.stop_silence_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
                 as usize;
         let min_speech_chunk_threshold =
             (self.min_speech_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
@@ -231,7 +242,8 @@ impl VoiceActivityDetector {
                         should_stop: false,
                         has_minimum_speech,
                     }
-                } else if silence_chunks >= silence_chunk_threshold {
+                } else if silence_chunks >= stop_silence_chunk_threshold {
+                    // Use the longer stop_silence_duration threshold
                     VadResult {
                         state: VadState::SilenceAfterSpeech,
                         should_stop: has_minimum_speech,
@@ -272,7 +284,7 @@ mod tests {
 
     #[test]
     fn test_vad_idle_to_speaking() {
-        let vad = VoiceActivityDetector::new(0.01, 1.5, 0.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 0.5, 1.5, 16000);
         let result = vad.process_chunk(0.05, VadState::Idle, 0, 0);
         assert_eq!(result.state, VadState::Speaking);
         assert!(!result.should_stop);
@@ -280,7 +292,7 @@ mod tests {
 
     #[test]
     fn test_vad_speaking_to_silence() {
-        let vad = VoiceActivityDetector::new(0.01, 1.5, 0.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 0.5, 1.5, 16000);
         let result = vad.process_chunk(0.005, VadState::Speaking, 0, 10);
         assert_eq!(result.state, VadState::SilenceAfterSpeech);
         assert!(!result.should_stop);

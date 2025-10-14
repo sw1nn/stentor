@@ -3,7 +3,9 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
-use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, SegmentCallbackData};
+use whisper_rs::{
+    FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
+};
 
 pub struct Transcriber {
     context: WhisperContext,
@@ -20,30 +22,9 @@ impl Transcriber {
 
         log::info!("Loading Whisper model from: {}", model_path.display());
 
-        // Redirect stderr to suppress verbose whisper.cpp output
-        // Save original stderr
-        use std::os::unix::io::AsRawFd;
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        let saved_stderr = unsafe { libc::dup(stderr_fd) };
-
-        // Redirect stderr to /dev/null
-        let dev_null = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .context("Failed to open /dev/null")?;
-        unsafe {
-            libc::dup2(dev_null.as_raw_fd(), stderr_fd);
-        }
-
         let ctx_params = WhisperContextParameters::default();
         let context = WhisperContext::new_with_params(&model_path.to_string_lossy(), ctx_params)
             .context("Failed to load Whisper model")?;
-
-        // Restore stderr
-        unsafe {
-            libc::dup2(saved_stderr, stderr_fd);
-            libc::close(saved_stderr);
-        }
 
         let language = if language == "auto" {
             None
@@ -168,8 +149,7 @@ impl Transcriber {
             progress_bar: pb.clone(),
         };
 
-        copy(&mut content, &mut progress_writer)
-            .context("Failed to write response to file")?;
+        copy(&mut content, &mut progress_writer).context("Failed to write response to file")?;
 
         pb.finish_with_message(format!("Downloaded ggml-{}.bin successfully!", model_size));
 
@@ -180,24 +160,14 @@ impl Transcriber {
     ///
     /// Audio should be mono, 16kHz sample rate, f32 format
     /// The callback is called in real-time as each segment is decoded during transcription
-    pub fn transcribe_with_realtime_callback<F>(&self, audio_data: &[f32], mut callback: F) -> Result<String>
+    pub fn transcribe_with_realtime_callback<F>(
+        &self,
+        audio_data: &[f32],
+        mut callback: F,
+    ) -> Result<String>
     where
         F: FnMut(&str) + Send + 'static,
     {
-        // Redirect stderr to suppress verbose whisper.cpp output
-        use std::os::unix::io::AsRawFd;
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        let saved_stderr = unsafe { libc::dup(stderr_fd) };
-
-        // Redirect stderr to /dev/null
-        let dev_null = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .context("Failed to open /dev/null")?;
-        unsafe {
-            libc::dup2(dev_null.as_raw_fd(), stderr_fd);
-        }
-
         // Create state
         let mut state = self
             .context
@@ -213,6 +183,7 @@ impl Transcriber {
         }
 
         // Disable printing to console
+        params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
@@ -226,12 +197,6 @@ impl Transcriber {
         let result = state
             .full(params, audio_data)
             .context("Failed to transcribe audio");
-
-        // Restore stderr
-        unsafe {
-            libc::dup2(saved_stderr, stderr_fd);
-            libc::close(saved_stderr);
-        }
 
         result?;
 
@@ -250,95 +215,11 @@ impl Transcriber {
         Ok(text.trim().to_string())
     }
 
-    /// Transcribe audio data with a callback for progressive updates
-    ///
-    /// Audio should be mono, 16kHz sample rate, f32 format
-    /// The callback is called with each segment after transcription completes
-    pub fn transcribe_with_callback<F>(&self, audio_data: &[f32], mut callback: F) -> Result<String>
-    where
-        F: FnMut(&str),
-    {
-        // Redirect stderr to suppress verbose whisper.cpp output
-        use std::os::unix::io::AsRawFd;
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        let saved_stderr = unsafe { libc::dup(stderr_fd) };
-
-        // Redirect stderr to /dev/null
-        let dev_null = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .context("Failed to open /dev/null")?;
-        unsafe {
-            libc::dup2(dev_null.as_raw_fd(), stderr_fd);
-        }
-
-        // Convert audio to the format whisper-rs expects
-        let mut state = self
-            .context
-            .create_state()
-            .context("Failed to create Whisper state")?;
-
-        // Configure transcription parameters
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-
-        // Set language if specified
-        if let Some(ref lang) = self.language {
-            params.set_language(Some(lang));
-        }
-
-        // Disable printing to console
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-
-        // Process audio
-        let result = state
-            .full(params, audio_data)
-            .context("Failed to transcribe audio");
-
-        // Restore stderr
-        unsafe {
-            libc::dup2(saved_stderr, stderr_fd);
-            libc::close(saved_stderr);
-        }
-
-        result?;
-
-        // Extract transcribed text and call callback for each segment
-        let num_segments = state.full_n_segments();
-
-        let mut text = String::new();
-        for i in 0..num_segments {
-            if let Some(segment) = state.get_segment(i) {
-                if let Ok(segment_text) = segment.to_str_lossy() {
-                    callback(&segment_text);
-                    text.push_str(&segment_text);
-                }
-            }
-        }
-
-        Ok(text.trim().to_string())
-    }
-
     /// Transcribe audio data
     ///
     /// Audio should be mono, 16kHz sample rate, f32 format
     #[allow(dead_code)]
     pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
-        // Redirect stderr to suppress verbose whisper.cpp output
-        use std::os::unix::io::AsRawFd;
-        let stderr_fd = std::io::stderr().as_raw_fd();
-        let saved_stderr = unsafe { libc::dup(stderr_fd) };
-
-        // Redirect stderr to /dev/null
-        let dev_null = std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .context("Failed to open /dev/null")?;
-        unsafe {
-            libc::dup2(dev_null.as_raw_fd(), stderr_fd);
-        }
-
         // Convert audio to the format whisper-rs expects
         let mut state = self
             .context
@@ -354,6 +235,7 @@ impl Transcriber {
         }
 
         // Disable printing to console
+        params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
@@ -362,12 +244,6 @@ impl Transcriber {
         let result = state
             .full(params, audio_data)
             .context("Failed to transcribe audio");
-
-        // Restore stderr
-        unsafe {
-            libc::dup2(saved_stderr, stderr_fd);
-            libc::close(saved_stderr);
-        }
 
         result?;
 

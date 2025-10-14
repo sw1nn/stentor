@@ -36,48 +36,44 @@ impl TranscriptionDialog {
         let window = ApplicationWindow::builder()
             .application(app)
             .title("Transcription")
-            .default_width(400)
-            .default_height(200)
+            .default_width(700)
+            .default_height(180)
             .resizable(false)
             .build();
 
         // Main content box
-        let main_box = Box::new(Orientation::Vertical, 20);
-        main_box.set_margin_top(30);
-        main_box.set_margin_bottom(30);
-        main_box.set_margin_start(30);
-        main_box.set_margin_end(30);
+        let main_box = Box::new(Orientation::Vertical, 0);
+        main_box.set_margin_top(0);
+        main_box.set_margin_bottom(0);
+        main_box.set_margin_start(0);
+        main_box.set_margin_end(0);
 
-        // Spinner
-        let spinner = Spinner::new();
-        spinner.set_size_request(48, 48);
-        main_box.append(&spinner);
-
-        // Status label
-        let status_label = Label::new(None);
-        status_label.set_markup("<big><b>Initializing...</b></big>");
-        main_box.append(&status_label);
-
-        // Microphone info label
-        let mic_label = Label::new(None);
-        mic_label.set_markup("<span foreground='#888888'>Detecting microphone...</span>");
-        mic_label.set_wrap(true);
-        main_box.append(&mic_label);
-
-        // Audio level indicator
+        // Audio level indicator at the very top (full width)
         let level_bar = LevelBar::new();
         level_bar.set_min_value(0.0);
         level_bar.set_max_value(0.1);
         level_bar.set_value(0.0);
         level_bar.set_visible(true);
+        level_bar.set_size_request(-1, 2);  // Full width, 2px height
+        level_bar.set_vexpand(false);
+        level_bar.set_valign(gtk4::Align::Start);
         main_box.append(&level_bar);
+
+        // Content area with padding
+        let content_box = Box::new(Orientation::Vertical, 10);
+        content_box.set_margin_top(15);
+        content_box.set_margin_bottom(10);
+        content_box.set_margin_start(20);
+        content_box.set_margin_end(20);
 
         // Text preview label (shown during recording/processing)
         let text_preview = Label::new(None);
         text_preview.set_wrap(true);
-        text_preview.set_max_width_chars(50);
+        text_preview.set_xalign(0.0);  // Left align
         text_preview.set_markup("<span foreground='#888888'>Listening...</span>");
-        main_box.append(&text_preview);
+        text_preview.set_vexpand(true);
+        text_preview.set_valign(gtk4::Align::Start);
+        content_box.append(&text_preview);
 
         // Editable text view (shown during review, hidden otherwise)
         let text_view = TextView::new();
@@ -90,14 +86,44 @@ impl TranscriptionDialog {
         // Put text view in a scrolled window
         let scrolled = ScrolledWindow::new();
         scrolled.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
-        scrolled.set_min_content_height(100);
+        scrolled.set_min_content_height(80);
+        scrolled.set_vexpand(true);
         scrolled.set_child(Some(&text_view));
         scrolled.set_visible(false);
-        main_box.append(&scrolled);
+        content_box.append(&scrolled);
+
+        main_box.append(&content_box);
+
+        // Status bar at the bottom
+        let status_box = Box::new(Orientation::Horizontal, 10);
+        status_box.set_margin_top(5);
+        status_box.set_margin_bottom(8);
+        status_box.set_margin_start(20);
+        status_box.set_margin_end(20);
+
+        // Spinner (small, in status bar)
+        let spinner = Spinner::new();
+        spinner.set_size_request(16, 16);
+        status_box.append(&spinner);
+
+        // Status label (small text in status bar)
+        let status_label = Label::new(None);
+        status_label.set_markup("<small>Initializing...</small>");
+        status_label.set_xalign(0.0);  // Left align
+        status_box.append(&status_label);
+
+        // Microphone info label (right-aligned in status bar)
+        let mic_label = Label::new(None);
+        mic_label.set_markup("<small><span foreground='#888888'>Detecting microphone...</span></small>");
+        mic_label.set_xalign(1.0);  // Right align
+        mic_label.set_hexpand(true);
+        status_box.append(&mic_label);
+
+        main_box.append(&status_box);
 
         window.set_child(Some(&main_box));
 
-        Self {
+        let dialog = Self {
             window,
             state: Arc::new(Mutex::new(TranscriptionState::Idle)),
             spinner,
@@ -110,7 +136,21 @@ impl TranscriptionDialog {
             on_manual_stop: None,
             on_send_text: None,
             on_cancel: None,
-        }
+        };
+
+        dialog
+    }
+
+    pub fn connect_close_handler<F>(&self, on_close: F)
+    where
+        F: Fn() + 'static,
+    {
+        let window = self.window.clone();
+        window.connect_close_request(move |_| {
+            log::info!("Window close requested");
+            on_close();
+            glib::Propagation::Proceed
+        });
     }
 
     pub fn set_on_manual_stop<F>(&mut self, callback: F)
@@ -150,8 +190,8 @@ impl TranscriptionDialog {
             // Escape key handling
             if keyval == gdk::Key::Escape {
                 match current_state {
-                    TranscriptionState::Recording => {
-                        // Stop and transcribe
+                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                        // Stop recording/transcribing and go to editing view
                         if let Some(ref callback) = on_manual_stop {
                             callback();
                         }
@@ -206,8 +246,8 @@ impl TranscriptionDialog {
             // Escape key handling in text view
             if keyval == gdk::Key::Escape {
                 match current_state {
-                    TranscriptionState::Recording => {
-                        // Stop and transcribe
+                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                        // Stop recording/transcribing and go to editing view
                         if let Some(ref callback) = on_manual_stop_clone {
                             callback();
                         }
@@ -252,7 +292,7 @@ impl TranscriptionDialog {
         match state {
             TranscriptionState::Recording => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<big><b>🎤 {}</b></big>", message));
+                self.status_label.set_markup(&format!("<small>🎤 {}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
                 log::debug!("Level bar updated: {}", level);
@@ -261,40 +301,45 @@ impl TranscriptionDialog {
             }
             TranscriptionState::Processing => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<big><b>⚙️ {}</b></big>", message));
-                self.level_bar.set_visible(false);
+                self.status_label.set_markup(&format!("<small>⚙️ {}</small>", message));
+                self.level_bar.set_visible(true);
+                self.level_bar.set_value(level.min(0.1));
                 self.text_preview.set_visible(true);  // Show text preview during processing
                 self.scrolled.set_visible(false);  // Hide editable text view during processing
             }
             TranscriptionState::Reviewing => {
                 self.spinner.stop();
                 self.status_label.set_markup(&format!(
-                    "<big><b>✓ {}</b></big>\n<span foreground='#888888'>Ctrl+Enter to send, Escape to cancel</span>",
+                    "<small>✓ {} • <span foreground='#888888'>Ctrl+Enter to send • Escape to cancel</span></small>",
                     message
                 ));
+                self.level_bar.set_visible(false);
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(true);
                 self.text_view.set_editable(true);  // Editable during reviewing
             }
             TranscriptionState::Typing => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<big><b>⌨️ {}</b></big>", message));
+                self.status_label.set_markup(&format!("<small>⌨️ {}</small>", message));
+                self.level_bar.set_visible(false);
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(false);
             }
             TranscriptionState::Error => {
                 self.spinner.stop();
-                self.status_label.set_markup(&format!("<big><b>❌ {}</b></big>", message));
+                self.status_label.set_markup(&format!("<small>❌ {}</small>", message));
+                self.level_bar.set_visible(false);
             }
             TranscriptionState::Idle => {
                 self.spinner.stop();
+                self.level_bar.set_visible(false);
             }
         }
     }
 
     pub fn set_microphone_info(&self, device_name: &str) {
         self.mic_label.set_markup(&format!(
-            "<span foreground='#888888'>🎤 {}</span>",
+            "<small><span foreground='#888888'>🎤 {}</span></small>",
             device_name
         ));
     }
