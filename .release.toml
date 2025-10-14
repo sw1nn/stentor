@@ -1,2 +1,0 @@
-[hooks]
-post-release = ["./packaging/arch/update_pkgbuild.sh {{version}}"]

@@ -1,0 +1,3 @@
+pre-release-replacements = [
+  { file = "packaging/arch/PKGBUILD", search = "pkgver=[a-z0-9\\.-]+", replace = "pkgver={{version}}" },
+]
