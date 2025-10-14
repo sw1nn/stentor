@@ -1,0 +1,19 @@
+[Unit]
+Description=Real-time transcription daemon
+Documentation=https://git.sw1nn.net/sw1nn/transcription-rs
+After=graphical-session.target
+
+[Service]
+Type=exec
+ExecStart=/usr/bin/sw1nn-transcription-daemon
+Restart=on-failure
+RestartSec=5
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# Ensure access to display and audio
+Environment="WAYLAND_DISPLAY=wayland-0"
+
+[Install]
+WantedBy=default.target

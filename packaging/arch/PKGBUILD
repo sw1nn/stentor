@@ -10,8 +10,10 @@ depends=('gtk4' 'libadwaita' 'alsa-lib')
 makedepends=('cargo' 'git')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription-git')
-source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver")
-sha256sums=('SKIP')
+source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver"
+        "sw1nn-transcription.service")
+sha256sums=('SKIP'
+            '942db05b1aeab900daf044dc860bb2e70ac3765068d05b2d0ec912b6c537aa3a')
 
 prepare() {
   cd "$srcdir/$pkgname"
@@ -50,6 +52,9 @@ package() {
   # Install binaries
   install -Dm755 "target/release/sw1nn-transcription-daemon" "$pkgdir/usr/bin/sw1nn-transcription-daemon"
   install -Dm755 "target/release/sw1nn-transcribe" "$pkgdir/usr/bin/sw1nn-transcribe"
+
+  # Install systemd user service
+  install -Dm644 "$srcdir/sw1nn-transcription.service" "$pkgdir/usr/lib/systemd/user/sw1nn-transcription.service"
 
   # Install sample config
   install -Dm644 "config.toml.sample" "$pkgdir/usr/share/doc/$pkgname/config.toml.sample"
