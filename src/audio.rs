@@ -1,17 +1,20 @@
 use anyhow::{Context, Result};
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Sample, SampleFormat, Stream, StreamConfig};
+use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context as PulseContext, FlagSet as ContextFlagSet};
 use libpulse_binding::mainloop::threaded::Mainloop;
+use libpulse_binding::sample::{Format, Spec};
+use libpulse_simple_binding::Simple;
+use libpulse_binding::stream::Direction;
+use libpulse_binding::def::BufferAttr;
+use std::cell::RefCell;
+use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 pub struct AudioRecorder {
-    #[allow(dead_code)]
+    source_name: Option<String>,
     sample_rate: u32,
     silence_threshold: f32,
-    device: Device,
-    config: StreamConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -25,168 +28,197 @@ pub enum RecordingCommand {
 }
 
 impl AudioRecorder {
-    pub fn new(sample_rate: u32, silence_threshold: f32, device_name: Option<String>) -> Result<Self> {
-        let host = cpal::default_host();
+    pub fn new(sample_rate: u32, silence_threshold: f32, source_name: Option<String>) -> Result<Self> {
+        // Validate that the source exists if specified
+        if let Some(ref name) = source_name {
+            log::info!("Looking for audio source: {}", name);
 
-        let device = if let Some(name) = device_name {
-            // Find device by name
-            log::info!("Looking for audio device: {}", name);
-
-            let devices: Vec<_> = host.input_devices()
-                .context("Failed to enumerate input devices")?
-                .collect();
-
-            // Log available devices for debugging
-            log::debug!("Available input devices:");
-            for dev in &devices {
-                if let Ok(dev_name) = dev.name() {
-                    log::debug!("  - {}", dev_name);
-                }
+            // Check if source exists
+            if !Self::source_exists(name)? {
+                anyhow::bail!("Audio source '{}' not found", name);
             }
 
-            devices.into_iter()
-                .find(|d| {
-                    if let Ok(device_name) = d.name() {
-                        device_name == name
-                    } else {
-                        false
-                    }
-                })
-                .with_context(|| {
-                    format!("Audio device '{}' not found. Use 'cargo run --example list_devices' to see available devices.", name)
-                })?
+            log::info!("Found audio source: {}", name);
         } else {
-            // Use default device
-            host.default_input_device()
-                .context("No input device available")?
-        };
-
-        log::info!("Using audio device: {}", device.name()?);
-
-        let config = device
-            .default_input_config()
-            .context("Failed to get default input config")?;
-
-        log::info!("Sample format: {:?}", config.sample_format());
-        log::info!("Sample rate: {}", config.sample_rate().0);
-        log::info!("Channels: {}", config.channels());
-
-        // Create a config with our desired sample rate
-        let config = StreamConfig {
-            channels: 1,
-            sample_rate: cpal::SampleRate(sample_rate),
-            buffer_size: cpal::BufferSize::Fixed(1024),
-        };
+            log::info!("Using default audio source");
+        }
 
         Ok(Self {
+            source_name,
             sample_rate,
             silence_threshold,
-            device,
-            config,
         })
     }
 
-    pub fn get_device_name(&self) -> Result<String> {
-        let device_name = self.device.name().context("Failed to get device name")?;
+    /// Check if a source with the given name exists
+    fn source_exists(name: &str) -> Result<bool> {
+        let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
+        let mut context = PulseContext::new(&mainloop, "stentor-source-check")
+            .context("Failed to create PulseAudio context")?;
 
-        // If the device is "default", also get the actual PulseAudio source description
-        if device_name.to_lowercase() == "default" {
-            if let Ok(desc) = get_pulse_default_source_description() {
-                return Ok(format!("{} ({})", device_name, desc));
+        context
+            .connect(None, ContextFlagSet::NOFLAGS, None)
+            .context("Failed to connect to PulseAudio")?;
+
+        mainloop.lock();
+        mainloop.start().context("Failed to start mainloop")?;
+
+        // Wait for context to be ready
+        loop {
+            match context.get_state() {
+                libpulse_binding::context::State::Ready => break,
+                libpulse_binding::context::State::Failed
+                | libpulse_binding::context::State::Terminated => {
+                    mainloop.unlock();
+                    mainloop.stop();
+                    anyhow::bail!("PulseAudio context failed");
+                }
+                _ => {
+                    mainloop.unlock();
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                    mainloop.lock();
+                }
             }
         }
 
-        Ok(device_name)
+        let found = Rc::new(RefCell::new(false));
+        let found_clone = Rc::clone(&found);
+        let target_name = name.to_string();
+
+        let introspect = context.introspect();
+        introspect.get_source_info_list(move |result| match result {
+            ListResult::Item(source_info) => {
+                if let Some(source_name) = source_info.name.as_ref() {
+                    if source_name.as_ref() == target_name.as_str() {
+                        *found_clone.borrow_mut() = true;
+                    }
+                }
+            }
+            ListResult::End => {}
+            ListResult::Error => {}
+        });
+
+        mainloop.unlock();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        mainloop.lock();
+        let exists = *found.borrow();
+        mainloop.unlock();
+
+        mainloop.stop();
+
+        Ok(exists)
+    }
+
+    pub fn get_device_name(&self) -> Result<String> {
+        if let Some(ref name) = self.source_name {
+            // Get the description for the named source
+            return get_pulse_source_description(name);
+        }
+
+        // Get the default source description
+        get_pulse_default_source_description()
     }
 
     pub fn get_actual_sample_rate(&self) -> Result<u32> {
-        let config = self.device.default_input_config()?;
-        Ok(config.sample_rate().0)
+        // PulseAudio will resample to our requested rate
+        Ok(self.sample_rate)
     }
 
     pub fn start_recording(
         &self,
         chunk_tx: Sender<AudioChunk>,
         cmd_rx: Arc<Mutex<Receiver<RecordingCommand>>>,
-    ) -> Result<Stream> {
-        let silence_threshold = self.silence_threshold;
-
-        let stream = match self.device.default_input_config()?.sample_format() {
-            SampleFormat::F32 => self.build_stream::<f32>(chunk_tx, cmd_rx, silence_threshold)?,
-            SampleFormat::I16 => self.build_stream::<i16>(chunk_tx, cmd_rx, silence_threshold)?,
-            SampleFormat::U16 => self.build_stream::<u16>(chunk_tx, cmd_rx, silence_threshold)?,
-            format => anyhow::bail!("Unsupported sample format: {:?}", format),
+    ) -> Result<()> {
+        // Create sample spec
+        let spec = Spec {
+            format: Format::S16le,
+            channels: 1,
+            rate: self.sample_rate,
         };
 
-        stream.play().context("Failed to start audio stream")?;
+        if !spec.is_valid() {
+            anyhow::bail!("Invalid sample spec");
+        }
 
-        Ok(stream)
-    }
-
-    fn build_stream<T>(
-        &self,
-        chunk_tx: Sender<AudioChunk>,
-        cmd_rx: Arc<Mutex<Receiver<RecordingCommand>>>,
-        _silence_threshold: f32,
-    ) -> Result<Stream>
-    where
-        T: Sample + cpal::SizedSample,
-        f32: cpal::FromSample<T>,
-    {
-        let err_fn = |err| {
-            log::error!("Audio stream error: {}", err);
+        // Set buffer attributes
+        let buffer_attr = BufferAttr {
+            maxlength: u32::MAX,
+            tlength: u32::MAX,
+            prebuf: u32::MAX,
+            minreq: u32::MAX,
+            fragsize: 1024 * 2, // Request 1024 samples at a time (in bytes, so *2 for s16)
         };
 
-        let chunk_tx = Arc::new(Mutex::new(Some(chunk_tx)));
-        let chunk_tx_clone = Arc::clone(&chunk_tx);
+        // Create simple PulseAudio connection
+        let simple = Simple::new(
+            None,                           // Use default server
+            "stentor",                      // Application name
+            Direction::Record,              // Record direction
+            self.source_name.as_deref(),    // Source name (None for default)
+            "Audio Recording",              // Stream description
+            &spec,                          // Sample spec
+            None,                           // Channel map (None for default)
+            Some(&buffer_attr),             // Buffer attributes
+        ).context("Failed to create PulseAudio simple connection")?;
 
-        let stream = self.device.build_input_stream(
-            &self.config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| {
+        log::info!("PulseAudio simple connection created and ready");
+
+        // Spawn a thread to continuously read audio
+        std::thread::spawn(move || {
+            // Buffer to read audio into (1024 samples * 2 bytes per sample)
+            let mut buffer = vec![0u8; 1024 * 2];
+
+            loop {
                 // Check for stop command
                 if let Ok(rx) = cmd_rx.lock() {
                     if let Ok(RecordingCommand::Stop) = rx.try_recv() {
-                        log::info!("Stop command received, closing audio stream");
-                        // Drop the sender to signal the receiver
-                        if let Ok(mut tx_opt) = chunk_tx_clone.lock() {
-                            *tx_opt = None;
-                        }
-                        return;
+                        log::info!("Stop command received in audio thread");
+                        break;
                     }
                 }
 
-                // Convert samples to f32
-                let samples: Vec<f32> = data.iter().map(|&s| s.to_sample::<f32>()).collect();
+                // Read audio data (this blocks until data is available)
+                match simple.read(&mut buffer) {
+                    Ok(()) => {
+                        // Convert i16 samples to f32
+                        let samples: Vec<f32> = buffer
+                            .chunks_exact(2)
+                            .map(|chunk| {
+                                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
+                                sample as f32 / 32768.0
+                            })
+                            .collect();
 
-                // Calculate RMS
-                let rms = calculate_rms(&samples);
+                        // Calculate RMS
+                        let rms = calculate_rms(&samples);
 
-                // Send chunk
-                let chunk = AudioChunk {
-                    data: samples,
-                    rms,
-                };
+                        // Send chunk
+                        let chunk = AudioChunk { data: samples, rms };
 
-                if let Ok(tx_opt) = chunk_tx.lock() {
-                    if let Some(ref tx) = *tx_opt {
-                        if tx.send(chunk).is_err() {
-                            log::warn!("Failed to send audio chunk (receiver dropped)");
+                        if chunk_tx.send(chunk).is_err() {
+                            log::info!("Receiver dropped, stopping audio thread");
+                            break;
                         }
                     }
+                    Err(e) => {
+                        log::error!("Failed to read audio: {:?}", e);
+                        break;
+                    }
                 }
-            },
-            err_fn,
-            None,
-        )?;
+            }
 
-        Ok(stream)
+            log::info!("Audio recording thread exiting");
+        });
+
+        Ok(())
     }
 }
 
 pub struct VoiceActivityDetector {
     silence_threshold: f32,
     min_speech_duration: f32,
-    stop_silence_duration: f32,  // Silence duration to trigger stop
+    stop_silence_duration: f32, // Silence duration to trigger stop
     sample_rate: u32,
     samples_per_chunk: usize,
 }
@@ -302,6 +334,62 @@ fn calculate_rms(samples: &[f32]) -> f32 {
 
     let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
     (sum_squares / samples.len() as f32).sqrt()
+}
+
+fn get_pulse_source_description(source_name: &str) -> Result<String> {
+    let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
+    let mut context = PulseContext::new(&mainloop, "stentor-query")
+        .context("Failed to create PulseAudio context")?;
+
+    context
+        .connect(None, ContextFlagSet::NOFLAGS, None)
+        .context("Failed to connect to PulseAudio")?;
+
+    mainloop.lock();
+    mainloop.start().context("Failed to start mainloop")?;
+
+    // Wait for context to be ready
+    loop {
+        match context.get_state() {
+            libpulse_binding::context::State::Ready => break,
+            libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
+                mainloop.unlock();
+                mainloop.stop();
+                anyhow::bail!("PulseAudio context failed");
+            }
+            _ => {
+                mainloop.unlock();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                mainloop.lock();
+            }
+        }
+    }
+
+    let desc_result = Arc::new(Mutex::new(None));
+    let desc_result_clone = Arc::clone(&desc_result);
+
+    let introspector = context.introspect();
+    introspector.get_source_info_by_name(source_name, move |list_result| {
+        if let libpulse_binding::callbacks::ListResult::Item(source_info) = list_result {
+            if let Some(desc) = source_info.description.as_ref() {
+                *desc_result_clone.lock().unwrap() = Some(desc.to_string());
+            }
+        }
+    });
+
+    mainloop.unlock();
+
+    // Wait for callback
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    mainloop.stop();
+
+    let desc = desc_result.lock().unwrap().clone();
+    if let Some(desc) = desc {
+        Ok(desc)
+    } else {
+        anyhow::bail!("Could not get description for source '{}'", source_name)
+    }
 }
 
 fn get_pulse_default_source_description() -> Result<String> {

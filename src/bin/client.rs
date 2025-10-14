@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use cpal::traits::{DeviceTrait, HostTrait};
+use libpulse_binding::callbacks::ListResult;
+use libpulse_binding::context::{Context as PulseContext, FlagSet as ContextFlagSet};
+use libpulse_binding::mainloop::threaded::Mainloop;
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use stentor::config::{ClientConfig, Config};
 use stentor::daemon::DaemonCommand;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -135,71 +139,89 @@ async fn main() -> Result<()> {
 }
 
 fn list_sources() -> Result<()> {
-    // Temporarily redirect stderr to suppress ALSA warnings
-    // These are harmless warnings about missing PCM plugins (pulse/jack/oss)
-    #[cfg(target_os = "linux")]
-    struct StderrRedirect {
-        old_stderr: libc::c_int,
-    }
+    let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
+    let mut context = PulseContext::new(&mainloop, "stentor-list-sources")
+        .context("Failed to create PulseAudio context")?;
 
-    #[cfg(target_os = "linux")]
-    impl Drop for StderrRedirect {
-        fn drop(&mut self) {
-            unsafe {
-                libc::dup2(self.old_stderr, libc::STDERR_FILENO);
-                libc::close(self.old_stderr);
+    context
+        .connect(None, ContextFlagSet::NOFLAGS, None)
+        .context("Failed to connect to PulseAudio")?;
+
+    mainloop.lock();
+    mainloop.start().context("Failed to start mainloop")?;
+
+    // Wait for context to be ready
+    loop {
+        match context.get_state() {
+            libpulse_binding::context::State::Ready => break,
+            libpulse_binding::context::State::Failed
+            | libpulse_binding::context::State::Terminated => {
+                mainloop.unlock();
+                mainloop.stop();
+                anyhow::bail!("PulseAudio context failed");
+            }
+            _ => {
+                mainloop.unlock();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                mainloop.lock();
             }
         }
     }
 
-    #[cfg(target_os = "linux")]
-    let _stderr_redirect = {
-        use std::os::fd::AsRawFd;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .open("/dev/null")
-            .ok()
-            .and_then(|f| {
-                let stderr_fd = std::io::stderr().as_raw_fd();
-                let old_stderr = unsafe { libc::dup(stderr_fd) };
-                if old_stderr >= 0 {
-                    unsafe { libc::dup2(f.as_raw_fd(), stderr_fd) };
-                    Some(StderrRedirect { old_stderr })
-                } else {
-                    None
-                }
-            })
-    };
+    // Collect source names and find default
+    let sources = Rc::new(RefCell::new(Vec::new()));
+    let sources_clone = Rc::clone(&sources);
 
-    let host = cpal::default_host();
+    let introspect = context.introspect();
+    introspect.get_source_info_list(move |result| match result {
+        ListResult::Item(source_info) => {
+            if let Some(name) = source_info.name.as_ref() {
+                sources_clone.borrow_mut().push(name.to_string());
+            }
+        }
+        ListResult::End => {}
+        ListResult::Error => {}
+    });
+
+    mainloop.unlock();
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    // Get default source
+    let default_source = Rc::new(RefCell::new(None));
+    let default_source_clone = Rc::clone(&default_source);
+
+    mainloop.lock();
+    let introspect = context.introspect();
+    introspect.get_server_info(move |server_info| {
+        if let Some(default) = server_info.default_source_name.as_ref() {
+            *default_source_clone.borrow_mut() = Some(default.to_string());
+        }
+    });
+    mainloop.unlock();
+
+    std::thread::sleep(std::time::Duration::from_millis(100));
+
+    mainloop.lock();
+    let source_names = sources.borrow().clone();
+    let default_name = default_source.borrow().clone();
+    mainloop.unlock();
+
+    mainloop.stop();
 
     println!("Available audio input sources:");
     println!("==============================\n");
 
-    let devices: Vec<_> = host
-        .input_devices()
-        .context("Failed to enumerate input devices")?
-        .collect();
-
-    if devices.is_empty() {
-        println!("No input devices found");
+    if source_names.is_empty() {
+        println!("No input sources found");
         return Ok(());
     }
 
-    // Get default device name for comparison
-    let default_name = host
-        .default_input_device()
-        .and_then(|d| d.name().ok());
-
-    for device in devices {
-        if let Ok(name) = device.name() {
-            let is_default = default_name.as_ref().map(|dn| dn == &name).unwrap_or(false);
-
-            if is_default {
-                println!("  {} (default)", name);
-            } else {
-                println!("  {}", name);
-            }
+    for name in &source_names {
+        let is_default = default_name.as_ref().map(|dn| dn == name).unwrap_or(false);
+        if is_default {
+            println!("  {} (default)", name);
+        } else {
+            println!("  {}", name);
         }
     }
 

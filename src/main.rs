@@ -50,12 +50,8 @@ struct Cli {
     silence_duration: Option<f32>,
 }
 
-struct RecordingSession {
-    #[allow(dead_code)]
-    stream: cpal::Stream,
-    #[allow(dead_code)]
-    stop_tx: std::sync::mpsc::Sender<RecordingCommand>,
-}
+// RecordingSession is no longer needed - audio streams are managed
+// entirely within the AudioRecorder's background thread
 
 // Messages for updating UI from background threads
 #[derive(Debug, Clone)]
@@ -146,14 +142,11 @@ async fn main() -> Result<()> {
     // Application state
     #[allow(clippy::arc_with_non_send_sync)]
     let current_dialog: Arc<Mutex<Option<TranscriptionDialog>>> = Arc::new(Mutex::new(None));
-    #[allow(clippy::arc_with_non_send_sync)]
-    let current_session: Arc<Mutex<Option<RecordingSession>>> = Arc::new(Mutex::new(None));
     let current_ui_tx: Arc<Mutex<Option<Sender<UIMessage>>>> = Arc::new(Mutex::new(None));
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> = Arc::new(Mutex::new(None));
 
     // Clone for GTK main loop
     let current_dialog_clone = Arc::clone(&current_dialog);
-    let _current_session_clone = Arc::clone(&current_session);
     let current_ui_tx_clone = Arc::clone(&current_ui_tx);
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
     let app_clone = app.clone();
@@ -351,8 +344,8 @@ fn start_recording_session(
     // Store stop_tx BEFORE starting recording so Escape key can use it
     *stop_tx_storage.lock().unwrap() = Some(stop_tx);
 
-    // Start audio stream
-    let stream = recorder.start_recording(chunk_tx, stop_rx)?;
+    // Start audio stream (runs in background thread)
+    recorder.start_recording(chunk_tx, stop_rx)?;
 
     // Use VAD to detect speech start and silence
     // IMPORTANT: Use the ACTUAL sample rate from the device, not the requested rate
@@ -556,8 +549,7 @@ fn start_recording_session(
         }
     }
 
-    // Keep stream alive
-    drop(stream);
+    // Audio stream cleanup happens automatically in the background thread
 
     // Get final transcription result
     let final_text = accumulated_text.lock().unwrap().clone();
