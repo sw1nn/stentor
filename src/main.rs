@@ -4,7 +4,9 @@ use clap::Parser;
 use gtk4::prelude::*;
 use gtk4::{glib, Application};
 use libadwaita as adw;
+use std::cell::RefCell;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -140,14 +142,15 @@ async fn main() -> Result<()> {
     let _hold_guard = app.hold();
 
     // Application state
-    #[allow(clippy::arc_with_non_send_sync)]
-    let current_dialog: Arc<Mutex<Option<TranscriptionDialog>>> = Arc::new(Mutex::new(None));
-    let current_ui_tx: Arc<Mutex<Option<Sender<UIMessage>>>> = Arc::new(Mutex::new(None));
+    // Use Rc<RefCell<>> for GTK widgets since all GTK operations happen on the main thread
+    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> = Rc::new(RefCell::new(None));
+    let current_ui_tx: Rc<RefCell<Option<Sender<UIMessage>>>> = Rc::new(RefCell::new(None));
+    // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> = Arc::new(Mutex::new(None));
 
     // Clone for GTK main loop
-    let current_dialog_clone = Arc::clone(&current_dialog);
-    let current_ui_tx_clone = Arc::clone(&current_ui_tx);
+    let current_dialog_clone = Rc::clone(&current_dialog);
+    let current_ui_tx_clone = Rc::clone(&current_ui_tx);
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
     let app_clone = app.clone();
     let config_clone = config.clone();
@@ -160,9 +163,9 @@ async fn main() -> Result<()> {
 
             match command {
                 DaemonCommand::Start { unmute_source, source } => {
-                    let mut dialog_lock = current_dialog_clone.lock().unwrap();
+                    let mut dialog_ref = current_dialog_clone.borrow_mut();
 
-                    if dialog_lock.is_none() {
+                    if dialog_ref.is_none() {
                         // Create new dialog
                         let mut dialog = TranscriptionDialog::new(&app_clone);
 
@@ -175,12 +178,12 @@ async fn main() -> Result<()> {
 
                         // Create UI update channel
                         let (ui_tx, ui_rx) = async_channel::unbounded::<UIMessage>();
-                        *current_ui_tx_clone.lock().unwrap() = Some(ui_tx.clone());
+                        *current_ui_tx_clone.borrow_mut() = Some(ui_tx.clone());
 
                         // Setup UI message receiver
                         let dialog_for_updates = dialog.clone();
-                        let dialog_state_clone = Arc::clone(&current_dialog_clone);
-                        let ui_tx_state_clone = Arc::clone(&current_ui_tx_clone);
+                        let dialog_state_clone = Rc::clone(&current_dialog_clone);
+                        let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
                                 log::debug!("UI message received: {:?}", msg);
@@ -201,8 +204,8 @@ async fn main() -> Result<()> {
                                         log::info!("Closing dialog and cleaning up state");
                                         dialog_for_updates.close();
                                         // Clean up state
-                                        *dialog_state_clone.lock().unwrap() = None;
-                                        *ui_tx_state_clone.lock().unwrap() = None;
+                                        *dialog_state_clone.borrow_mut() = None;
+                                        *ui_tx_state_clone.borrow_mut() = None;
                                         // Stop processing messages
                                         break;
                                     }
@@ -274,10 +277,10 @@ async fn main() -> Result<()> {
                             *stop_tx_storage.lock().unwrap() = None;
                         });
 
-                        *dialog_lock = Some(dialog);
+                        *dialog_ref = Some(dialog);
                     } else {
                         // Dialog already exists, bring to front
-                        if let Some(ref dialog) = *dialog_lock {
+                        if let Some(ref dialog) = *dialog_ref {
                             dialog.present();
                         }
                     }
