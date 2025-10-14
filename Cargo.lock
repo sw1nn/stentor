@@ -2251,6 +2251,7 @@ dependencies = [
  "log",
  "reqwest",
  "serde",
+ "serde_json",
  "signal-hook",
  "signal-hook-tokio",
  "thiserror 2.0.17",

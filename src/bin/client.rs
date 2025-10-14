@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 use stentor::config::{ClientConfig, Config};
+use stentor::daemon::DaemonCommand;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -74,25 +75,27 @@ async fn main() -> Result<()> {
             )
         })?;
 
-    // Send command
-    let command = cli.command.unwrap_or_else(|| "start".to_string());
-    let command_str = if command == "start" {
-        let mut cmd_parts = vec![command.clone()];
-
-        if cli.unmute_source {
-            cmd_parts.push("--unmute-source".to_string());
+    // Build command
+    let command_name = cli.command.unwrap_or_else(|| "start".to_string());
+    let command = match command_name.as_str() {
+        "start" => {
+            // Use CLI source if specified, otherwise fall back to config
+            let source = cli.source.or(client_config.source);
+            DaemonCommand::Start {
+                unmute_source: cli.unmute_source,
+                source,
+            }
         }
-
-        // Use CLI source if specified, otherwise fall back to config
-        let source = cli.source.or(client_config.source);
-        if let Some(src) = source {
-            cmd_parts.push(format!("--source={}", src));
-        }
-
-        format!("{}\n", cmd_parts.join(" "))
-    } else {
-        format!("{}\n", command)
+        "stop" => DaemonCommand::Stop,
+        "status" => DaemonCommand::Status,
+        "quit" => DaemonCommand::Quit,
+        _ => anyhow::bail!("Unknown command: {}", command_name),
     };
+
+    // Serialize to JSON
+    let command_str = serde_json::to_string(&command)
+        .context("Failed to serialize command")?
+        + "\n";
 
     stream
         .write_all(command_str.as_bytes())

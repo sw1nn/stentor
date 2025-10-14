@@ -1,14 +1,17 @@
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use std::str::FromStr;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
 pub enum DaemonCommand {
     Start {
+        #[serde(default)]
         unmute_source: bool,
+        #[serde(default)]
         source: Option<String>,
     },
     Stop,
@@ -16,54 +19,6 @@ pub enum DaemonCommand {
     Quit,
 }
 
-impl FromStr for DaemonCommand {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parts: Vec<&str> = s.trim().split_whitespace().collect();
-
-        match parts.get(0).copied() {
-            Some("start") => {
-                let mut unmute_source = false;
-                let mut source = None;
-
-                // Parse optional flags
-                for part in parts.iter().skip(1) {
-                    if *part == "--unmute-source" || *part == "--unmute-mic" {
-                        // Support both for backwards compatibility
-                        unmute_source = true;
-                    } else if let Some(src) = part.strip_prefix("--source=") {
-                        source = Some(src.to_string());
-                    } else if let Some(mic) = part.strip_prefix("--microphone=") {
-                        // Support --microphone for backwards compatibility
-                        source = Some(mic.to_string());
-                    }
-                }
-
-                Ok(DaemonCommand::Start {
-                    unmute_source,
-                    source,
-                })
-            }
-            Some("stop") => Ok(DaemonCommand::Stop),
-            Some("status") => Ok(DaemonCommand::Status),
-            Some("quit") => Ok(DaemonCommand::Quit),
-            _ => Err(format!("Unknown command: {}", s)),
-        }
-    }
-}
-
-impl DaemonCommand {
-    #[allow(dead_code)]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            DaemonCommand::Start { .. } => "start",
-            DaemonCommand::Stop => "stop",
-            DaemonCommand::Status => "status",
-            DaemonCommand::Quit => "quit",
-        }
-    }
-}
 
 pub struct DaemonServer {
     socket_path: PathBuf,
@@ -175,31 +130,37 @@ async fn handle_client(
     while reader.read_line(&mut line).await? > 0 {
         let command_str = line.trim();
 
-        if let Ok(command) = command_str.parse::<DaemonCommand>() {
-            log::info!("Received command: {:?}", command);
+        // Try to parse as JSON
+        match serde_json::from_str::<DaemonCommand>(command_str) {
+            Ok(command) => {
+                log::info!("Received command: {:?}", command);
 
-            // Send command to main loop
-            if command_tx.send(command.clone()).await.is_err() {
-                log::error!("Failed to send command (receiver dropped)");
-                writer.write_all(b"ERROR: daemon shutting down\n").await?;
-                break;
-            }
-
-            // Send response
-            let response = match command {
-                DaemonCommand::Start { .. } => "OK: started\n",
-                DaemonCommand::Stop => "OK: stopped\n",
-                DaemonCommand::Status => "OK: running\n",
-                DaemonCommand::Quit => {
-                    writer.write_all(b"OK: quitting\n").await?;
+                // Send command to main loop
+                if command_tx.send(command.clone()).await.is_err() {
+                    log::error!("Failed to send command (receiver dropped)");
+                    writer.write_all(b"ERROR: daemon shutting down\n").await?;
                     break;
                 }
-            };
 
-            writer.write_all(response.as_bytes()).await?;
-        } else {
-            log::warn!("Unknown command: {}", command_str);
-            writer.write_all(b"ERROR: unknown command\n").await?;
+                // Send response
+                let response = match command {
+                    DaemonCommand::Start { .. } => "OK: started\n",
+                    DaemonCommand::Stop => "OK: stopped\n",
+                    DaemonCommand::Status => "OK: running\n",
+                    DaemonCommand::Quit => {
+                        writer.write_all(b"OK: quitting\n").await?;
+                        break;
+                    }
+                };
+
+                writer.write_all(response.as_bytes()).await?;
+            }
+            Err(e) => {
+                log::warn!("Failed to parse command '{}': {}", command_str, e);
+                writer
+                    .write_all(format!("ERROR: invalid command: {}\n", e).as_bytes())
+                    .await?;
+            }
         }
 
         line.clear();
@@ -213,69 +174,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_command_parsing() {
-        assert_eq!(
-            "start".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: false,
-                source: None
-            })
-        );
-        assert_eq!(
-            "start --unmute-source".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: true,
-                source: None
-            })
-        );
-        // Test backwards compatibility with --unmute-mic
-        assert_eq!(
-            "start --unmute-mic".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: true,
-                source: None
-            })
-        );
-        assert_eq!(
-            "start --source=alsa_input.usb".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: false,
-                source: Some("alsa_input.usb".to_string())
-            })
-        );
-        // Test backwards compatibility with --microphone
-        assert_eq!(
-            "start --microphone=alsa_input.usb".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: false,
-                source: Some("alsa_input.usb".to_string())
-            })
-        );
-        assert_eq!(
-            "start --unmute-source --source=alsa_input.usb".parse::<DaemonCommand>(),
-            Ok(DaemonCommand::Start {
-                unmute_source: true,
-                source: Some("alsa_input.usb".to_string())
-            })
-        );
-        assert_eq!("stop".parse::<DaemonCommand>(), Ok(DaemonCommand::Stop));
-        assert_eq!("status".parse::<DaemonCommand>(), Ok(DaemonCommand::Status));
-        assert_eq!("quit".parse::<DaemonCommand>(), Ok(DaemonCommand::Quit));
-        assert!("invalid".parse::<DaemonCommand>().is_err());
-    }
+    fn test_command_serialization() {
+        // Test Start with no options
+        let cmd = DaemonCommand::Start {
+            unmute_source: false,
+            source: None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
 
-    #[test]
-    fn test_command_as_str() {
-        assert_eq!(
-            DaemonCommand::Start {
-                unmute_source: false,
-                source: None
-            }
-            .as_str(),
-            "start"
-        );
-        assert_eq!(DaemonCommand::Stop.as_str(), "stop");
-        assert_eq!(DaemonCommand::Status.as_str(), "status");
-        assert_eq!(DaemonCommand::Quit.as_str(), "quit");
+        // Test Start with unmute_source
+        let cmd = DaemonCommand::Start {
+            unmute_source: true,
+            source: None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
+
+        // Test Start with source (including spaces)
+        let cmd = DaemonCommand::Start {
+            unmute_source: false,
+            source: Some("USB Condenser Microphone".to_string()),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
+
+        // Test Start with both options
+        let cmd = DaemonCommand::Start {
+            unmute_source: true,
+            source: Some("HD-Audio Generic".to_string()),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
+
+        // Test other commands
+        let commands = vec![
+            DaemonCommand::Stop,
+            DaemonCommand::Status,
+            DaemonCommand::Quit,
+        ];
+
+        for cmd in commands {
+            let json = serde_json::to_string(&cmd).unwrap();
+            let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+            assert_eq!(cmd, parsed);
+        }
     }
 }
