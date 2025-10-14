@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use cpal::traits::{DeviceTrait, HostTrait};
 use std::path::PathBuf;
 use stentor::config::{ClientConfig, Config};
 use stentor::daemon::DaemonCommand;
@@ -10,9 +11,10 @@ use tokio::net::UnixStream;
 #[command(name = "stentorctl")]
 #[command(about = "Control transcription daemon", long_about = None)]
 #[command(after_help = "Commands:
-  start     Start recording (opens dialog and begins listening)
-  stop      Stop recording (triggers transcription)
-  quit      Quit the daemon
+  start         Start recording (opens dialog and begins listening)
+  stop          Stop recording (triggers transcription)
+  quit          Quit the daemon
+  list-sources  List available audio input sources
 
 Examples:
   # Start recording
@@ -21,8 +23,11 @@ Examples:
   # Start recording and unmute source
   stentorctl start --unmute-source
 
+  # List available audio sources
+  stentorctl list-sources
+
   # Start recording with specific source
-  stentorctl start --source=alsa_input.usb
+  stentorctl start --source=\"USB Condenser Microphone\"
 
   # Stop recording and transcribe
   stentorctl stop
@@ -33,7 +38,7 @@ Examples:
 Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.")]
 struct Cli {
     /// Command to send (default: start)
-    #[arg(value_parser = ["start", "stop", "quit"], default_value = "start")]
+    #[arg(value_parser = ["start", "stop", "quit", "list-sources"], default_value = "start")]
     command: Option<String>,
 
     /// Unmute source before recording (only applies to 'start' command)
@@ -54,6 +59,13 @@ async fn main() -> Result<()> {
     env_logger::init();
 
     let cli = Cli::parse();
+    let command_name = cli.command.unwrap_or_else(|| "start".to_string());
+
+    // Handle list-sources command locally (doesn't need daemon)
+    if command_name == "list-sources" {
+        list_sources()?;
+        return Ok(());
+    }
 
     // Load configs to get socket path and client settings
     let config = Config::load().context("Failed to load configuration")?;
@@ -76,7 +88,6 @@ async fn main() -> Result<()> {
         })?;
 
     // Build command
-    let command_name = cli.command.unwrap_or_else(|| "start".to_string());
     let command = match command_name.as_str() {
         "start" => {
             // Use CLI source if specified, otherwise fall back to config
@@ -119,6 +130,48 @@ async fn main() -> Result<()> {
     if response.starts_with("ERROR") {
         std::process::exit(1);
     }
+
+    Ok(())
+}
+
+fn list_sources() -> Result<()> {
+    let host = cpal::default_host();
+
+    println!("Available audio input sources:");
+    println!("==============================\n");
+
+    let devices: Vec<_> = host
+        .input_devices()
+        .context("Failed to enumerate input devices")?
+        .collect();
+
+    if devices.is_empty() {
+        println!("No input devices found");
+        return Ok(());
+    }
+
+    // Get default device name for comparison
+    let default_name = host
+        .default_input_device()
+        .and_then(|d| d.name().ok());
+
+    for device in devices {
+        if let Ok(name) = device.name() {
+            let is_default = default_name.as_ref().map(|dn| dn == &name).unwrap_or(false);
+
+            if is_default {
+                println!("  {} (default)", name);
+            } else {
+                println!("  {}", name);
+            }
+        }
+    }
+
+    println!("\nUsage:");
+    println!("  stentorctl start --source=\"SOURCE_NAME\"");
+    println!("\nOr add to ~/.config/stentor/config.toml:");
+    println!("  [client]");
+    println!("  source = \"SOURCE_NAME\"");
 
     Ok(())
 }
