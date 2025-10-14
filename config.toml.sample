@@ -4,7 +4,8 @@
 [daemon]
 # Whisper model size: tiny, base, small, medium, large
 # Larger models are more accurate but slower and require more memory
-model = "base"
+# Default: tiny (fastest, good for real-time use)
+model = "tiny"
 
 # Language code for transcription (ISO 639-1)
 # Set to "auto" for automatic language detection (slower)
@@ -33,4 +34,5 @@ language = "en"
 # output-command = "xclip -selection clipboard"
 
 # Unix socket filename (created in $XDG_RUNTIME_DIR)
+# Default: stentor.sock
 #socket-name = "stentor.sock"

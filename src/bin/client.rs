@@ -17,6 +17,9 @@ Examples:
   # Start recording
   stentorctl start
 
+  # Start recording and unmute microphone
+  stentorctl start --unmute-mic
+
   # Stop recording and transcribe
   stentorctl stop
 
@@ -28,6 +31,10 @@ struct Cli {
     /// Command to send (default: start)
     #[arg(value_parser = ["start", "stop", "quit"], default_value = "start")]
     command: Option<String>,
+
+    /// Unmute microphone before recording (only applies to 'start' command)
+    #[arg(long)]
+    unmute_mic: bool,
 
     /// Unix socket path (default: from config or $XDG_RUNTIME_DIR/stentor.sock)
     #[arg(long)]
@@ -61,9 +68,14 @@ async fn main() -> Result<()> {
 
     // Send command
     let command = cli.command.unwrap_or_else(|| "start".to_string());
+    let command_str = if command == "start" && cli.unmute_mic {
+        format!("{} --unmute-mic\n", command)
+    } else {
+        format!("{}\n", command)
+    };
 
     stream
-        .write_all(format!("{}\n", command).as_bytes())
+        .write_all(command_str.as_bytes())
         .await
         .context("Failed to send command")?;
 

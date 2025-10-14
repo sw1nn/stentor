@@ -14,12 +14,14 @@ mod config;
 mod daemon;
 mod dialog;
 mod keyboard;
+mod mic_mute;
 mod transcription;
 
 use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use config::Config;
 use daemon::{DaemonCommand, DaemonServer};
 use dialog::{TranscriptionDialog, TranscriptionState};
+use mic_mute::MicMuteManager;
 use transcription::Transcriber;
 
 #[derive(Parser)]
@@ -164,7 +166,7 @@ async fn main() -> Result<()> {
             log::info!("Processing command: {:?}", command);
 
             match command {
-                DaemonCommand::Start => {
+                DaemonCommand::Start { unmute_mic } => {
                     let mut dialog_lock = current_dialog_clone.lock().unwrap();
 
                     if dialog_lock.is_none() {
@@ -260,6 +262,7 @@ async fn main() -> Result<()> {
                                 transcriber_clone,
                                 ui_tx_for_recording,
                                 stop_tx_storage.clone(),
+                                unmute_mic,
                             ) {
                                 Ok(_) => {
                                     log::info!("Recording session completed");
@@ -310,8 +313,22 @@ fn start_recording_session(
     transcriber: Arc<Transcriber>,
     ui_tx: Sender<UIMessage>,
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
+    unmute_mic: bool,
 ) -> Result<()> {
     log::info!("Starting recording session");
+
+    // Unmute microphone if requested
+    let _mic_manager = if unmute_mic {
+        match MicMuteManager::unmute_if_needed() {
+            Ok(manager) => Some(manager),
+            Err(e) => {
+                log::warn!("Failed to manage mic mute state: {}. Continuing anyway.", e);
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // Create audio recorder
     let recorder = AudioRecorder::new(16000, config.silence_threshold)?;

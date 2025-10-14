@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
-    Start,
+    Start { unmute_mic: bool },
     Stop,
     Status,
     Quit,
@@ -17,11 +17,16 @@ impl FromStr for DaemonCommand {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.trim() {
-            "start" => Ok(DaemonCommand::Start),
-            "stop" => Ok(DaemonCommand::Stop),
-            "status" => Ok(DaemonCommand::Status),
-            "quit" => Ok(DaemonCommand::Quit),
+        let parts: Vec<&str> = s.trim().split_whitespace().collect();
+
+        match parts.get(0).copied() {
+            Some("start") => {
+                let unmute_mic = parts.get(1) == Some(&"--unmute-mic");
+                Ok(DaemonCommand::Start { unmute_mic })
+            }
+            Some("stop") => Ok(DaemonCommand::Stop),
+            Some("status") => Ok(DaemonCommand::Status),
+            Some("quit") => Ok(DaemonCommand::Quit),
             _ => Err(format!("Unknown command: {}", s)),
         }
     }
@@ -31,7 +36,7 @@ impl DaemonCommand {
     #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
-            DaemonCommand::Start => "start",
+            DaemonCommand::Start { .. } => "start",
             DaemonCommand::Stop => "stop",
             DaemonCommand::Status => "status",
             DaemonCommand::Quit => "quit",
@@ -46,10 +51,27 @@ pub struct DaemonServer {
 
 impl DaemonServer {
     pub fn new(socket_path: PathBuf) -> Result<Self> {
-        // Remove existing socket if it exists
+        // Remove existing socket if it exists and is actually a socket
         if socket_path.exists() {
-            std::fs::remove_file(&socket_path)
-                .with_context(|| format!("Failed to remove existing socket: {}", socket_path.display()))?;
+            let metadata = std::fs::metadata(&socket_path)
+                .with_context(|| format!("Failed to get metadata for: {}", socket_path.display()))?;
+
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::FileTypeExt;
+                if metadata.file_type().is_socket() {
+                    std::fs::remove_file(&socket_path)
+                        .with_context(|| format!("Failed to remove existing socket: {}", socket_path.display()))?;
+                } else {
+                    anyhow::bail!("Path exists but is not a socket: {}", socket_path.display());
+                }
+            }
+
+            #[cfg(not(unix))]
+            {
+                std::fs::remove_file(&socket_path)
+                    .with_context(|| format!("Failed to remove existing socket: {}", socket_path.display()))?;
+            }
         }
 
         Ok(Self {
@@ -96,8 +118,26 @@ impl DaemonServer {
 impl Drop for DaemonServer {
     fn drop(&mut self) {
         if self.socket_path.exists() {
-            if let Err(e) = std::fs::remove_file(&self.socket_path) {
-                log::error!("Failed to remove socket file: {}", e);
+            // Check if it's actually a socket before removing
+            if let Ok(metadata) = std::fs::metadata(&self.socket_path) {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::FileTypeExt;
+                    if metadata.file_type().is_socket() {
+                        if let Err(e) = std::fs::remove_file(&self.socket_path) {
+                            log::error!("Failed to remove socket file: {}", e);
+                        }
+                    } else {
+                        log::warn!("Path exists but is not a socket, not removing: {}", self.socket_path.display());
+                    }
+                }
+
+                #[cfg(not(unix))]
+                {
+                    if let Err(e) = std::fs::remove_file(&self.socket_path) {
+                        log::error!("Failed to remove socket file: {}", e);
+                    }
+                }
             }
         }
     }
@@ -126,7 +166,7 @@ async fn handle_client(
 
             // Send response
             let response = match command {
-                DaemonCommand::Start => "OK: started\n",
+                DaemonCommand::Start { .. } => "OK: started\n",
                 DaemonCommand::Stop => "OK: stopped\n",
                 DaemonCommand::Status => "OK: running\n",
                 DaemonCommand::Quit => {
@@ -153,7 +193,8 @@ mod tests {
 
     #[test]
     fn test_command_parsing() {
-        assert_eq!("start".parse::<DaemonCommand>(), Ok(DaemonCommand::Start));
+        assert_eq!("start".parse::<DaemonCommand>(), Ok(DaemonCommand::Start { unmute_mic: false }));
+        assert_eq!("start --unmute-mic".parse::<DaemonCommand>(), Ok(DaemonCommand::Start { unmute_mic: true }));
         assert_eq!("stop".parse::<DaemonCommand>(), Ok(DaemonCommand::Stop));
         assert_eq!("status".parse::<DaemonCommand>(), Ok(DaemonCommand::Status));
         assert_eq!("quit".parse::<DaemonCommand>(), Ok(DaemonCommand::Quit));
@@ -162,7 +203,7 @@ mod tests {
 
     #[test]
     fn test_command_as_str() {
-        assert_eq!(DaemonCommand::Start.as_str(), "start");
+        assert_eq!(DaemonCommand::Start { unmute_mic: false }.as_str(), "start");
         assert_eq!(DaemonCommand::Stop.as_str(), "stop");
         assert_eq!(DaemonCommand::Status.as_str(), "status");
         assert_eq!(DaemonCommand::Quit.as_str(), "quit");

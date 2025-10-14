@@ -9,7 +9,7 @@ pub struct ConfigFile {
     pub daemon: Config,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_model")]
     pub model: String,
@@ -33,8 +33,22 @@ pub struct Config {
     pub socket_name: String,
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            model: default_model(),
+            language: default_language(),
+            silence_duration: default_silence_duration(),
+            silence_threshold: default_silence_threshold(),
+            min_speech_duration: default_min_speech_duration(),
+            output_command: None,
+            socket_name: default_socket_name(),
+        }
+    }
+}
+
 fn default_model() -> String {
-    "base".to_string()
+    "tiny".to_string()
 }
 
 fn default_language() -> String {
@@ -65,12 +79,22 @@ impl Config {
             .context("Failed to initialize XDG directories")?;
 
         // Try to find config file
-        if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
-            Self::load_from_file(&config_path)
+        let config = if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
+            Self::load_from_file(&config_path)?
         } else {
             log::info!("No config file found, using defaults");
-            Ok(Self::default())
+            Self::default()
+        };
+
+        // Warn if socket name doesn't end in .sock
+        if !config.socket_name.ends_with(".sock") {
+            log::warn!(
+                "Socket name '{}' does not end with .sock - this may cause issues with some tools",
+                config.socket_name
+            );
         }
+
+        Ok(config)
     }
 
     /// Load configuration from a specific file
@@ -130,7 +154,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.model, "base");
+        assert_eq!(config.model, "tiny");
         assert_eq!(config.language, "en");
         assert_eq!(config.silence_duration, 1.5);
         assert_eq!(config.silence_threshold, 0.01);
