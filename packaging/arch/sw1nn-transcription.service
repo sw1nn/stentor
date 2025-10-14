@@ -12,8 +12,5 @@ KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=10
 
-# Ensure access to display and audio
-Environment="WAYLAND_DISPLAY=wayland-0"
-
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

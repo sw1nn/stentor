@@ -13,7 +13,7 @@ conflicts=('sw1nn-transcription-git')
 source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/transcription-rs.git#tag=v$pkgver"
   "sw1nn-transcription.service")
 sha256sums=('SKIP'
-  '33537f382be6862db7208ac257445c77d891b199d74cf9a13bdf2e08da6ded24')
+  '7f6bbf0d1cc7f2426395e31189db911dd51555738fe82b1dd3ec99f52c723392')
 
 prepare() {
   cd "$srcdir/$pkgname"
@@ -27,14 +27,10 @@ build() {
   export CARGO_HOME="$srcdir/cargo-home"
   # Unset CARGO_TARGET_DIR to use local target directory
   unset CARGO_TARGET_DIR
-  # Remove LTO flags that interfere with whisper's native compilation
+  # Remove system LTO flags that interfere with whisper's native compilation
   export CFLAGS="${CFLAGS//-flto=auto/}"
   export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
-  # Override Cargo.toml profile settings that cause linking issues in makepkg
-  export CARGO_PROFILE_RELEASE_LTO=false
-  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
-  # Force use of gcc linker instead of lld
-  export RUSTFLAGS="-C linker=gcc"
+
   cargo build --frozen --release
 }
 
