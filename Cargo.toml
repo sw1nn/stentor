@@ -1,6 +1,6 @@
 [package]
 name = "stentor"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Neale Swinnerton <neale@sw1nn.com>"]
 description = "Real-time voice transcription with Whisper"
