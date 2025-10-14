@@ -292,7 +292,7 @@ impl TranscriptionDialog {
         match state {
             TranscriptionState::Recording => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<small>🎤 {}</small>", message));
+                self.status_label.set_markup(&format!("<small>{}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
                 log::debug!("Level bar updated: {}", level);
@@ -338,9 +338,34 @@ impl TranscriptionDialog {
     }
 
     pub fn set_microphone_info(&self, device_name: &str) {
-        self.mic_label.set_markup(&format!(
-            "<small><span foreground='#888888'>🎤 {}</span></small>",
+        // Check if device name starts with "default"
+        let is_default = device_name.to_lowercase().starts_with("default");
+
+        // Extract just the description part if it's formatted as "default (Description)"
+        let display_name = if is_default {
+            if let Some(start) = device_name.find('(') {
+                if let Some(end) = device_name.find(')') {
+                    if start < end {
+                        &device_name[start + 1..end]
+                    } else {
+                        device_name
+                    }
+                } else {
+                    device_name
+                }
+            } else {
+                device_name
+            }
+        } else {
             device_name
+        };
+
+        // Use grey color for default devices, white for explicitly chosen ones
+        let color = if is_default { "#888888" } else { "#FFFFFF" };
+
+        self.mic_label.set_markup(&format!(
+            "<small><span foreground='{}'>🎙️ {}</span></small>",
+            color, display_name
         ));
     }
 
