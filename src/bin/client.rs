@@ -135,6 +135,42 @@ async fn main() -> Result<()> {
 }
 
 fn list_sources() -> Result<()> {
+    // Temporarily redirect stderr to suppress ALSA warnings
+    // These are harmless warnings about missing PCM plugins (pulse/jack/oss)
+    #[cfg(target_os = "linux")]
+    struct StderrRedirect {
+        old_stderr: libc::c_int,
+    }
+
+    #[cfg(target_os = "linux")]
+    impl Drop for StderrRedirect {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.old_stderr, libc::STDERR_FILENO);
+                libc::close(self.old_stderr);
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    let _stderr_redirect = {
+        use std::os::fd::AsRawFd;
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("/dev/null")
+            .ok()
+            .and_then(|f| {
+                let stderr_fd = std::io::stderr().as_raw_fd();
+                let old_stderr = unsafe { libc::dup(stderr_fd) };
+                if old_stderr >= 0 {
+                    unsafe { libc::dup2(f.as_raw_fd(), stderr_fd) };
+                    Some(StderrRedirect { old_stderr })
+                } else {
+                    None
+                }
+            })
+    };
+
     let host = cpal::default_host();
 
     println!("Available audio input sources:");
