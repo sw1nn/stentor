@@ -176,8 +176,11 @@ async fn main() -> Result<()> {
                         };
                         dialog.set_source_info(&source_name);
 
-                        // Create UI update channel
-                        let (ui_tx, ui_rx) = async_channel::unbounded::<UIMessage>();
+                        // Create UI update channel with backpressure
+                        // Bounded to prevent OOM if UI thread blocks
+                        // Capacity of 128 (power of 2) allows ~8 seconds of buffering at typical message rate
+                        // and enables compiler optimization of modulo operations to bitwise AND
+                        let (ui_tx, ui_rx) = async_channel::bounded::<UIMessage>(128);
                         *current_ui_tx_clone.borrow_mut() = Some(ui_tx.clone());
 
                         // Setup UI message receiver
