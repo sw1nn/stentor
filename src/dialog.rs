@@ -1,0 +1,328 @@
+use gtk4::prelude::*;
+use gtk4::{gdk, glib, Application, ApplicationWindow, Box, Label, LevelBar, Orientation, Spinner, TextView, ScrolledWindow};
+use std::sync::{Arc, Mutex};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TranscriptionState {
+    Idle,
+    Recording,
+    Processing,
+    Reviewing,
+    #[allow(dead_code)]
+    Typing,
+    Error,
+}
+
+#[derive(Clone)]
+pub struct TranscriptionDialog {
+    window: ApplicationWindow,
+    state: Arc<Mutex<TranscriptionState>>,
+    spinner: Spinner,
+    status_label: Label,
+    mic_label: Label,
+    level_bar: LevelBar,
+    text_view: TextView,
+    scrolled: ScrolledWindow,
+    text_preview: Label,
+
+    // Callbacks
+    on_manual_stop: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_send_text: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
+impl TranscriptionDialog {
+    pub fn new(app: &Application) -> Self {
+        let window = ApplicationWindow::builder()
+            .application(app)
+            .title("Transcription")
+            .default_width(400)
+            .default_height(200)
+            .resizable(false)
+            .build();
+
+        // Main content box
+        let main_box = Box::new(Orientation::Vertical, 20);
+        main_box.set_margin_top(30);
+        main_box.set_margin_bottom(30);
+        main_box.set_margin_start(30);
+        main_box.set_margin_end(30);
+
+        // Spinner
+        let spinner = Spinner::new();
+        spinner.set_size_request(48, 48);
+        main_box.append(&spinner);
+
+        // Status label
+        let status_label = Label::new(None);
+        status_label.set_markup("<big><b>Initializing...</b></big>");
+        main_box.append(&status_label);
+
+        // Microphone info label
+        let mic_label = Label::new(None);
+        mic_label.set_markup("<span foreground='#888888'>Detecting microphone...</span>");
+        mic_label.set_wrap(true);
+        main_box.append(&mic_label);
+
+        // Audio level indicator
+        let level_bar = LevelBar::new();
+        level_bar.set_min_value(0.0);
+        level_bar.set_max_value(0.1);
+        level_bar.set_value(0.0);
+        level_bar.set_visible(true);
+        main_box.append(&level_bar);
+
+        // Text preview label (shown during recording/processing)
+        let text_preview = Label::new(None);
+        text_preview.set_wrap(true);
+        text_preview.set_max_width_chars(50);
+        text_preview.set_markup("<span foreground='#888888'>Listening...</span>");
+        main_box.append(&text_preview);
+
+        // Editable text view (shown during review, hidden otherwise)
+        let text_view = TextView::new();
+        text_view.set_wrap_mode(gtk4::WrapMode::WordChar);
+        text_view.set_left_margin(10);
+        text_view.set_right_margin(10);
+        text_view.set_top_margin(10);
+        text_view.set_bottom_margin(10);
+
+        // Put text view in a scrolled window
+        let scrolled = ScrolledWindow::new();
+        scrolled.set_policy(gtk4::PolicyType::Automatic, gtk4::PolicyType::Automatic);
+        scrolled.set_min_content_height(100);
+        scrolled.set_child(Some(&text_view));
+        scrolled.set_visible(false);
+        main_box.append(&scrolled);
+
+        window.set_child(Some(&main_box));
+
+        Self {
+            window,
+            state: Arc::new(Mutex::new(TranscriptionState::Idle)),
+            spinner,
+            status_label,
+            mic_label,
+            level_bar,
+            text_view,
+            scrolled,
+            text_preview,
+            on_manual_stop: None,
+            on_send_text: None,
+            on_cancel: None,
+        }
+    }
+
+    pub fn set_on_manual_stop<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_manual_stop = Some(Arc::new(callback));
+    }
+
+    pub fn set_on_send_text<F>(&mut self, callback: F)
+    where
+        F: Fn(String) + Send + Sync + 'static,
+    {
+        self.on_send_text = Some(Arc::new(callback));
+    }
+
+    pub fn set_on_cancel<F>(&mut self, callback: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.on_cancel = Some(Arc::new(callback));
+    }
+
+    pub fn setup_key_handlers(&self) {
+        let state = Arc::clone(&self.state);
+        let on_manual_stop = self.on_manual_stop.clone();
+        let on_manual_stop_clone = on_manual_stop.clone();
+        let on_send_text = self.on_send_text.clone();
+        let on_cancel = self.on_cancel.clone();
+        let text_view = self.text_view.clone();
+        let window = self.window.clone();
+
+        let key_controller = gtk4::EventControllerKey::new();
+        key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
+            let current_state = *state.lock().unwrap();
+
+            // Escape key handling
+            if keyval == gdk::Key::Escape {
+                match current_state {
+                    TranscriptionState::Recording => {
+                        // Stop and transcribe
+                        if let Some(ref callback) = on_manual_stop {
+                            callback();
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                    TranscriptionState::Reviewing => {
+                        // Cancel without sending
+                        if let Some(ref callback) = on_cancel {
+                            callback();
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {
+                        window.close();
+                        return glib::Propagation::Stop;
+                    }
+                }
+            }
+
+            // Ctrl+Enter key handling - send text when reviewing
+            if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
+                && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && current_state == TranscriptionState::Reviewing
+            {
+                if let Some(ref callback) = on_send_text {
+                    let buffer = text_view.buffer();
+                    let text = buffer.text(
+                        &buffer.start_iter(),
+                        &buffer.end_iter(),
+                        false,
+                    );
+                    callback(text.to_string());
+                }
+                return glib::Propagation::Stop;
+            }
+
+            glib::Propagation::Proceed
+        });
+
+        self.window.add_controller(key_controller);
+
+        // Also add key controller to text view
+        let state = Arc::clone(&self.state);
+        let on_send_text = self.on_send_text.clone();
+        let on_cancel = self.on_cancel.clone();
+        let text_view_clone = self.text_view.clone();
+
+        let text_key_controller = gtk4::EventControllerKey::new();
+        text_key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
+            let current_state = *state.lock().unwrap();
+
+            // Escape key handling in text view
+            if keyval == gdk::Key::Escape {
+                match current_state {
+                    TranscriptionState::Recording => {
+                        // Stop and transcribe
+                        if let Some(ref callback) = on_manual_stop_clone {
+                            callback();
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                    TranscriptionState::Reviewing => {
+                        if let Some(ref callback) = on_cancel {
+                            callback();
+                        }
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Ctrl+Enter in text view
+            if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
+                && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && current_state == TranscriptionState::Reviewing
+            {
+                if let Some(ref callback) = on_send_text {
+                    let buffer = text_view_clone.buffer();
+                    let text = buffer.text(
+                        &buffer.start_iter(),
+                        &buffer.end_iter(),
+                        false,
+                    );
+                    callback(text.to_string());
+                }
+                return glib::Propagation::Stop;
+            }
+
+            glib::Propagation::Proceed
+        });
+
+        self.text_view.add_controller(text_key_controller);
+    }
+
+    pub fn update_state(&self, state: TranscriptionState, message: &str, level: f64) {
+        *self.state.lock().unwrap() = state;
+
+        match state {
+            TranscriptionState::Recording => {
+                self.spinner.start();
+                self.status_label.set_markup(&format!("<big><b>🎤 {}</b></big>", message));
+                self.level_bar.set_visible(true);
+                self.level_bar.set_value(level.min(0.1));
+                log::debug!("Level bar updated: {}", level);
+                self.text_preview.set_visible(true);
+                self.scrolled.set_visible(false);
+            }
+            TranscriptionState::Processing => {
+                self.spinner.start();
+                self.status_label.set_markup(&format!("<big><b>⚙️ {}</b></big>", message));
+                self.level_bar.set_visible(false);
+                self.text_preview.set_visible(true);  // Show text preview during processing
+                self.scrolled.set_visible(false);  // Hide editable text view during processing
+            }
+            TranscriptionState::Reviewing => {
+                self.spinner.stop();
+                self.status_label.set_markup(&format!(
+                    "<big><b>✓ {}</b></big>\n<span foreground='#888888'>Ctrl+Enter to send, Escape to cancel</span>",
+                    message
+                ));
+                self.text_preview.set_visible(false);
+                self.scrolled.set_visible(true);
+                self.text_view.set_editable(true);  // Editable during reviewing
+            }
+            TranscriptionState::Typing => {
+                self.spinner.start();
+                self.status_label.set_markup(&format!("<big><b>⌨️ {}</b></big>", message));
+                self.text_preview.set_visible(false);
+                self.scrolled.set_visible(false);
+            }
+            TranscriptionState::Error => {
+                self.spinner.stop();
+                self.status_label.set_markup(&format!("<big><b>❌ {}</b></big>", message));
+            }
+            TranscriptionState::Idle => {
+                self.spinner.stop();
+            }
+        }
+    }
+
+    pub fn set_microphone_info(&self, device_name: &str) {
+        self.mic_label.set_markup(&format!(
+            "<span foreground='#888888'>🎤 {}</span>",
+            device_name
+        ));
+    }
+
+    pub fn set_text_preview(&self, text: &str) {
+        self.text_preview.set_text(text);
+    }
+
+    pub fn set_transcribed_text(&self, text: &str) {
+        let buffer = self.text_view.buffer();
+        buffer.set_text(text);
+    }
+
+    #[allow(dead_code)]
+    pub fn set_text_editable(&self, editable: bool) {
+        self.text_view.set_editable(editable);
+    }
+
+    pub fn present(&self) {
+        self.window.present();
+    }
+
+    pub fn close(&self) {
+        self.window.close();
+    }
+
+    #[allow(dead_code)]
+    pub fn window(&self) -> &ApplicationWindow {
+        &self.window
+    }
+}

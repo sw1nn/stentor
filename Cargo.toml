@@ -1,0 +1,67 @@
+[package]
+name = "sw1nn-transcription"
+version = "0.1.0"
+edition = "2021"
+authors = ["Neale Swinnerton <neale@sw1nn.com>"]
+description = "Real-time voice transcription with Whisper"
+license = "GPL-3.0"
+default-run = "sw1nn-transcription-daemon"
+
+[[bin]]
+name = "sw1nn-transcription-daemon"
+path = "src/main.rs"
+
+[[bin]]
+name = "sw1nn-transcribe"
+path = "src/bin/client.rs"
+
+[dependencies]
+# UI
+gtk4 = "0.9"
+libadwaita = "0.7"
+glib = "0.20"
+
+# Audio
+cpal = "0.15"
+hound = "3.5"
+
+# Transcription
+whisper-rs = "0.12"
+
+# HTTP client for downloading models
+reqwest = { version = "0.12", features = ["blocking", "stream"] }
+indicatif = "0.17"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+async-channel = "2.3"
+
+# Config
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+xdg = "2.5"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Input
+evdev = "0.12"
+
+# Error handling
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+log = "0.4"
+env_logger = "0.11"
+libc = "0.2"
+
+# Signal handling
+signal-hook = "0.3"
+signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true
