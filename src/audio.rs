@@ -31,8 +31,20 @@ impl AudioRecorder {
         let device = if let Some(name) = device_name {
             // Find device by name
             log::info!("Looking for audio device: {}", name);
-            host.input_devices()
+
+            let devices: Vec<_> = host.input_devices()
                 .context("Failed to enumerate input devices")?
+                .collect();
+
+            // Log available devices for debugging
+            log::debug!("Available input devices:");
+            for dev in &devices {
+                if let Ok(dev_name) = dev.name() {
+                    log::debug!("  - {}", dev_name);
+                }
+            }
+
+            devices.into_iter()
                 .find(|d| {
                     if let Ok(device_name) = d.name() {
                         device_name == name
@@ -40,7 +52,9 @@ impl AudioRecorder {
                         false
                     }
                 })
-                .with_context(|| format!("Audio device '{}' not found", name))?
+                .with_context(|| {
+                    format!("Audio device '{}' not found. Use 'cargo run --example list_devices' to see available devices.", name)
+                })?
         } else {
             // Use default device
             host.default_input_device()
