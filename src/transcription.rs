@@ -22,6 +22,10 @@ impl Transcriber {
 
         log::info!("Loading Whisper model from: {}", model_path.display());
 
+        // Suppress verbose whisper.cpp output by installing logging hooks
+        // Without a logging backend feature enabled, this effectively disables whisper logging
+        whisper_rs::install_logging_hooks();
+
         let ctx_params = WhisperContextParameters::default();
         let context = WhisperContext::new_with_params(&model_path.to_string_lossy(), ctx_params)
             .context("Failed to load Whisper model")?;
