@@ -96,6 +96,15 @@ async fn main() -> Result<()> {
     log::info!("Loaded configuration: {:?}", config);
     log::info!("Using silence_duration: {} seconds", config.silence_duration);
 
+    // Log build-time compilation flags for debugging
+    log::info!("Build-time flags:");
+    log::info!("  CFLAGS: {}", env!("BUILD_CFLAGS"));
+    log::info!("  CXXFLAGS: {}", env!("BUILD_CXXFLAGS"));
+    log::info!("  LDFLAGS: {}", env!("BUILD_LDFLAGS"));
+    log::info!("  RUSTFLAGS: {}", env!("BUILD_RUSTFLAGS"));
+    log::info!("  CARGO_PROFILE_RELEASE_LTO: {}", env!("BUILD_CARGO_PROFILE_RELEASE_LTO"));
+    log::info!("  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: {}", env!("BUILD_CARGO_PROFILE_RELEASE_CODEGEN_UNITS"));
+
     // Load Whisper model (this will download if not present)
     log::info!("Loading Whisper model: {}", config.model);
     let model = config.model.clone();
