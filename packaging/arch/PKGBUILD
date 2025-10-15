@@ -1,6 +1,6 @@
 # Maintainer: Neale Swinnerton <neale@sw1nn.com>
 pkgname=sw1nn-transcription
-pkgver=0.7.4
+pkgver=0.7.5
 pkgrel=4
 pkgdesc="Real-time voice transcription with Whisper"
 arch=('x86_64')
