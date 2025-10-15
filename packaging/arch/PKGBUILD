@@ -1,7 +1,7 @@
 # Maintainer: Neale Swinnerton <neale@sw1nn.com>
 pkgname=sw1nn-transcription
 pkgver=0.7.4
-pkgrel=1
+pkgrel=4
 pkgdesc="Real-time voice transcription with Whisper"
 arch=('x86_64')
 url="https://github.com/sw1nn/transcription-rs"
@@ -27,14 +27,10 @@ build() {
   export CARGO_HOME="$srcdir/cargo-home"
   # Unset CARGO_TARGET_DIR to use local target directory
   unset CARGO_TARGET_DIR
-  # Remove LTO flags that interfere with whisper's native compilation
+  # Remove system LTO flags that interfere with whisper's native compilation
   export CFLAGS="${CFLAGS//-flto=auto/}"
   export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
-  # Override Cargo.toml profile settings that cause linking issues in makepkg
-  export CARGO_PROFILE_RELEASE_LTO=false
-  export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16
-  # Force use of gcc linker instead of lld
-  export RUSTFLAGS="-C linker=gcc"
+
   cargo build --frozen --release
 }
 
