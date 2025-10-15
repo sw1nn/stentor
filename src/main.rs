@@ -50,6 +50,10 @@ struct Cli {
     /// Seconds of silence before stopping recording (default: from config or 1.5)
     #[arg(long)]
     silence_duration: Option<f32>,
+
+    /// Disable logging output (overrides RUST_LOG)
+    #[arg(short, long)]
+    quiet: bool,
 }
 
 // RecordingSession is no longer needed - audio streams are managed
@@ -68,11 +72,17 @@ enum UIMessage {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    env_logger::init();
-
-    // Parse CLI arguments
+    // Parse CLI arguments first to check for --quiet flag
     let cli = Cli::parse();
+
+    // Initialize logging with appropriate level
+    // If --quiet is set, disable logging completely
+    // Otherwise, default to info level if RUST_LOG is not set
+    if !cli.quiet {
+        env_logger::Builder::from_env(
+            env_logger::Env::default().default_filter_or("info")
+        ).init();
+    }
 
     // Initialize GTK and libadwaita
     adw::init().context("Failed to initialize libadwaita")?;
