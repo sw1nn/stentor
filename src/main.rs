@@ -98,6 +98,9 @@ async fn main() -> Result<()> {
 
     // Log build-time compilation flags for debugging
     log::info!("Build-time flags:");
+    log::info!("  Profile: {}", env!("BUILD_PROFILE"));
+    log::info!("  Opt Level: {}", env!("BUILD_OPT_LEVEL"));
+    log::info!("  Debug: {}", env!("BUILD_DEBUG"));
     log::info!("  CFLAGS: {}", env!("BUILD_CFLAGS"));
     log::info!("  CXXFLAGS: {}", env!("BUILD_CXXFLAGS"));
     log::info!("  LDFLAGS: {}", env!("BUILD_LDFLAGS"));
