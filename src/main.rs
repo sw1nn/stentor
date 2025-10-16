@@ -26,7 +26,9 @@ use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivity
 use config::Config;
 use daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use dialog::{DestinationSlot, TranscriptionDialog, TranscriptionState};
-use kitty::{find_claude_windows, list_kitty_windows, set_background_color, set_window_color_and_env};
+use kitty::{
+    find_claude_windows, list_kitty_windows, set_background_color, set_window_color_and_env,
+};
 use palette::Palette;
 use source_mute::SourceMuteManager;
 use transcription::Transcriber;
@@ -212,8 +214,9 @@ async fn main() -> Result<()> {
         while let Some(command) = command_rx.recv().await {
             tracing::info!("Processing command: {:?}", command);
 
+            use DaemonCommand::*;
             match command {
-                DaemonCommand::Start { unmute_source, source, multi_slot_handler } => {
+                Start { unmute_source, source, multi_slot_handler } => {
                     // Atomically check if recording is active and set it to true if not
                     // This prevents race conditions where multiple Start commands arrive concurrently
                     if recording_active_clone
@@ -262,28 +265,29 @@ async fn main() -> Result<()> {
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
                                 tracing::debug!("UI message received: {:?}", msg);
+                                use UIMessage::*;
                                 match msg {
-                                    UIMessage::UpdateState(state, text, level) => {
+                                    UpdateState(state, text, level) => {
                                         dialog_for_updates.update_state(state, &text, level);
                                     }
-                                    UIMessage::SetText(text) => {
+                                    SetText(text) => {
                                         dialog_for_updates.set_transcribed_text(&text);
                                     }
-                                    UIMessage::SetTextPreview(text) => {
+                                    SetTextPreview(text) => {
                                         dialog_for_updates.set_text_preview(&text);
                                     }
-                                    UIMessage::SetMicrophone(name) => {
+                                    SetMicrophone(name) => {
                                         dialog_for_updates.set_source_info(&name);
                                     }
-                                    UIMessage::SetDestinations(destinations) => {
+                                    SetDestinations(destinations) => {
                                         tracing::info!("Updating destinations with {} slots", destinations.len());
                                         dialog_for_updates.set_destinations(&destinations);
                                     }
-                                    UIMessage::StoreKittyWindowIds(window_ids) => {
+                                    StoreKittyWindowIds(window_ids) => {
                                         tracing::info!("Storing {} Kitty window IDs for cleanup", window_ids.len());
                                         *kitty_window_ids.borrow_mut() = window_ids;
                                     }
-                                    UIMessage::AutoSendText(text, dest_num) => {
+                                    AutoSendText(text, dest_num) => {
                                         tracing::info!("Auto-sending text to destination {}: {}", dest_num, text);
 
                                         // Select command based on destination
@@ -326,7 +330,7 @@ async fn main() -> Result<()> {
                                         recording_active_for_ui.store(false, Ordering::Release);
                                         break;
                                     }
-                                    UIMessage::Close => {
+                                    Close => {
                                         tracing::info!("Closing dialog and cleaning up state");
 
                                         // Stop recording thread if it's still running
@@ -543,7 +547,7 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                DaemonCommand::Stop { command_slot } => {
+                Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription
                     auto_send_slot_clone.store(command_slot as u8, Ordering::Release);
 
@@ -553,10 +557,10 @@ async fn main() -> Result<()> {
                         let _ = tx.send(RecordingCommand::Stop);
                     }
                 }
-                DaemonCommand::Status => {
+                Status => {
                     tracing::info!("Status: running");
                 }
-                DaemonCommand::Quit => {
+                Quit => {
                     tracing::info!("Quitting daemon");
                     app_clone.quit();
                     break;
@@ -674,8 +678,9 @@ fn start_recording_session(
                 );
                 vad_state = result.state;
 
+                use VadState::*;
                 match vad_state {
-                    VadState::Speaking => {
+                    Speaking => {
                         silence_chunks = 0;
                         speech_chunks += 1;
                         recorded_audio.push(chunk.data);
@@ -759,7 +764,7 @@ fn start_recording_session(
                             });
                         }
                     }
-                    VadState::SilenceAfterSpeech => {
+                    SilenceAfterSpeech => {
                         silence_chunks += 1;
                         recorded_audio.push(chunk.data);
 
@@ -839,7 +844,7 @@ fn start_recording_session(
                             break;
                         }
                     }
-                    VadState::Idle => {
+                    Idle => {
                         // Still waiting for speech
                         let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                             TranscriptionState::Recording,
@@ -866,7 +871,11 @@ fn start_recording_session(
 
     // Check if we should auto-send to a specific slot (atomically retrieve and clear)
     let slot_value = auto_send_slot.swap(u8::MAX, Ordering::AcqRel);
-    let auto_slot = if slot_value == u8::MAX { None } else { Some(slot_value as usize) };
+    let auto_slot = if slot_value == u8::MAX {
+        None
+    } else {
+        Some(slot_value as usize)
+    };
 
     if final_text.is_empty() {
         // No text yet, do one final transcription

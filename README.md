@@ -35,7 +35,7 @@ Edit `${XDG_CONFIG_HOME}/stentor/config.toml` to customize settings.
 
 Once the daemon is running, trigger transcription:
 ```bash
-stentorctl start
+stentorctl transcribe
 ```
 
 The daemon will:

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context as PulseContext, FlagSet as ContextFlagSet};
 use libpulse_binding::mainloop::threaded::Mainloop;
@@ -11,69 +11,73 @@ use stentor::daemon::{DaemonCommand, MultiSlotHandler};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
+#[derive(Subcommand)]
+enum ClientCommand {
+    /// Start recording (opens dialog and begins listening)
+    Transcribe {
+        /// Unmute source before recording
+        #[arg(long)]
+        unmute_source: bool,
+
+        /// Audio source to use (default: from config or PulseAudio default)
+        #[arg(long)]
+        source: Option<String>,
+
+        /// Multi-slot handler to use (none, kitty)
+        #[arg(long)]
+        multi_slot_handler: Option<MultiSlotHandler>,
+    },
+    /// Stop recording and finalize transcription
+    TranscribeEnd {
+        /// Destination slot for transcription (0 = default, 1-4 = specific slots)
+        #[arg(long, default_value = "0")]
+        slot: usize,
+    },
+    /// Query daemon status
+    Status,
+    /// Quit the daemon
+    Quit,
+    /// List available audio input sources
+    ListSources,
+}
+
 #[derive(Parser)]
 #[command(name = "stentorctl")]
 #[command(about = "Control transcription daemon", long_about = None)]
-#[command(after_help = "Commands:
-  start         Start recording (opens dialog and begins listening)
-  stop          Stop recording (triggers transcription)
-  quit          Quit the daemon
-  list-sources  List available audio input sources
-
-Examples:
+#[command(after_help = "Examples:
   # Start recording
-  stentorctl start
+  stentorctl transcribe
 
   # Start recording and unmute source
-  stentorctl start --unmute-source
+  stentorctl transcribe --unmute-source
 
   # List available audio sources
   stentorctl list-sources
 
   # Start recording with specific source
-  stentorctl start --source=\"USB Condenser Microphone\"
+  stentorctl transcribe --source=\"USB Condenser Microphone\"
 
   # Start recording with Kitty multi-slot handler
-  stentorctl start --multi-slot-handler=kitty
+  stentorctl transcribe --multi-slot-handler=kitty
 
-  # Stop recording and transcribe (shows dialog)
-  stentorctl stop
+  # Stop recording and finalize transcription (shows dialog)
+  stentorctl transcribe-end
 
   # Stop and auto-send to slot 1
-  stentorctl stop --slot=1
+  stentorctl transcribe-end --slot=1
 
   # Stop and auto-send to default output
-  stentorctl stop --slot=0
-
-  # Shorthand (no subcommand = start)
-  stentorctl
+  stentorctl transcribe-end --slot=0
 
 Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.
-Enable Kitty mode in [daemon] section with: kitty-mode = true")]
+")]
 struct Cli {
-    /// Command to send (default: start)
-    #[arg(value_parser = ["start", "stop", "quit", "list-sources"], default_value = "start")]
-    command: Option<String>,
-
-    /// Unmute source before recording (only applies to 'start' command)
-    #[arg(long)]
-    unmute_source: bool,
-
-    /// Audio source to use (default: from config or PulseAudio default)
-    #[arg(long)]
-    source: Option<String>,
-
     /// Unix socket path (default: from config or $XDG_RUNTIME_DIR/stentor.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
 
-    /// Destination slot for stop command (0 = default, 1-4 = specific slots)
-    #[arg(long, default_value = "0")]
-    slot: usize,
-
-    /// Multi-slot handler to use (none, kitty)
-    #[arg(long, value_parser = ["none", "kitty"])]
-    multi_slot_handler: Option<String>,
+    #[command(subcommand)]
+    command: Option<ClientCommand>,
 }
 
 #[tokio::main]
@@ -86,10 +90,16 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let command_name = cli.command.unwrap_or_else(|| "start".to_string());
+
+    // Default to Transcribe if no subcommand provided
+    let client_command = cli.command.unwrap_or(ClientCommand::Transcribe {
+        unmute_source: false,
+        source: None,
+        multi_slot_handler: None,
+    });
 
     // Handle list-sources command locally (doesn't need daemon)
-    if command_name == "list-sources" {
+    if matches!(client_command, ClientCommand::ListSources) {
         list_sources()?;
         return Ok(());
     }
@@ -112,37 +122,38 @@ async fn main() -> Result<()> {
         )
     })?;
 
-    // Build command
-    let command = match command_name.as_str() {
-        "start" => {
+    // Build daemon command from client command
+    use ClientCommand::*;
+    let command = match client_command {
+        Transcribe {
+            unmute_source,
+            source,
+            multi_slot_handler,
+        } => {
             // Use CLI source if specified, otherwise fall back to config
-            let source = cli.source.or(client_config.source);
+            let source = source.or(client_config.source);
 
             // Determine multi-slot handler from CLI arg or config
-            let multi_slot_handler = if let Some(handler_str) = &cli.multi_slot_handler {
-                match handler_str.as_str() {
-                    "kitty" => MultiSlotHandler::Kitty,
-                    "none" => MultiSlotHandler::None,
-                    _ => MultiSlotHandler::None,
-                }
-            } else if config.kitty_mode {
-                MultiSlotHandler::Kitty
-            } else {
-                MultiSlotHandler::None
-            };
+            let multi_slot_handler = multi_slot_handler
+                .or_else(|| {
+                    if config.kitty_mode {
+                        Some(MultiSlotHandler::Kitty)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(MultiSlotHandler::None);
 
             DaemonCommand::Start {
-                unmute_source: cli.unmute_source,
+                unmute_source,
                 source,
                 multi_slot_handler,
             }
         }
-        "stop" => DaemonCommand::Stop {
-            command_slot: cli.slot,
-        },
-        "status" => DaemonCommand::Status,
-        "quit" => DaemonCommand::Quit,
-        _ => anyhow::bail!("Unknown command: {}", command_name),
+        TranscribeEnd { slot } => DaemonCommand::Stop { command_slot: slot },
+        Status => DaemonCommand::Status,
+        Quit => DaemonCommand::Quit,
+        ListSources => unreachable!("ListSources handled above"),
     };
 
     // Serialize to JSON

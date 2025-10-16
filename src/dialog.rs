@@ -280,15 +280,16 @@ impl TranscriptionDialog {
 
             // Escape key handling
             if keyval == gdk::Key::Escape {
+                use TranscriptionState::*;
                 match current_state {
-                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                    Recording | Processing => {
                         // Stop recording/transcribing and go to editing view
                         if let Some(ref callback) = on_manual_stop {
                             callback();
                         }
                         return glib::Propagation::Stop;
                     }
-                    TranscriptionState::Reviewing => {
+                    Reviewing => {
                         // Cancel without sending
                         if let Some(ref callback) = on_cancel {
                             callback();
@@ -306,14 +307,15 @@ impl TranscriptionDialog {
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
             {
+                use TranscriptionState::*;
                 match current_state {
-                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                    Recording | Processing => {
                         // Stop recording and send to default slot (0)
                         if let Some(ref callback) = on_stop_and_send {
                             callback(0);
                         }
                     }
-                    TranscriptionState::Reviewing => {
+                    Reviewing => {
                         // Send text from editable view
                         if let Some(ref callback) = on_send_text {
                             let buffer = text_view.buffer();
@@ -339,8 +341,9 @@ impl TranscriptionDialog {
                 };
 
                 if let Some(dest) = dest_num {
+                    use TranscriptionState::*;
                     match current_state {
-                        TranscriptionState::Recording | TranscriptionState::Processing => {
+                        Recording | Processing => {
                             // Stop recording and send to specific slot
                             if let Some(ref callback) = on_stop_and_send {
                                 callback(dest);
@@ -379,8 +382,9 @@ impl TranscriptionDialog {
 
             // Escape key handling in text view
             if keyval == gdk::Key::Escape {
+                use TranscriptionState::*;
                 match current_state {
-                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                    Recording | Processing => {
                         // Stop recording/transcribing and go to editing view
                         if let Some(ref callback) = on_manual_stop_clone {
                             callback();
@@ -401,8 +405,9 @@ impl TranscriptionDialog {
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
             {
+                use TranscriptionState::*;
                 match current_state {
-                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                    Recording | Processing => {
                         // Stop recording and send to default slot (0)
                         if let Some(ref callback) = on_stop_and_send_clone {
                             callback(0);
@@ -434,14 +439,15 @@ impl TranscriptionDialog {
                 };
 
                 if let Some(dest) = dest_num {
+                    use TranscriptionState::*;
                     match current_state {
-                        TranscriptionState::Recording | TranscriptionState::Processing => {
+                        Recording | Processing => {
                             // Stop recording and send to specific slot
                             if let Some(ref callback) = on_stop_and_send_clone {
                                 callback(dest);
                             }
                         }
-                        TranscriptionState::Reviewing => {
+                        Reviewing => {
                             // Send text from editable view to specific slot
                             if let Some(ref callback) = on_send_text {
                                 let buffer = text_view_clone.buffer();
@@ -466,8 +472,9 @@ impl TranscriptionDialog {
     pub fn update_state(&self, state: TranscriptionState, message: &str, level: f64) {
         *self.state.lock().unwrap() = state;
 
+        use TranscriptionState::*;
         match state {
-            TranscriptionState::Recording => {
+            Recording => {
                 self.spinner.start();
                 self.status_label
                     .set_markup(&format!("<small>{}</small>", message));
@@ -477,7 +484,7 @@ impl TranscriptionDialog {
                 self.text_preview.set_visible(true);
                 self.scrolled.set_visible(false);
             }
-            TranscriptionState::Processing => {
+            Processing => {
                 self.spinner.start();
                 self.status_label
                     .set_markup(&format!("<small>⚙️ {}</small>", message));
@@ -497,7 +504,7 @@ impl TranscriptionDialog {
                 self.scrolled.set_visible(true);
                 self.text_view.set_editable(true); // Editable during reviewing
             }
-            TranscriptionState::Typing => {
+            Typing => {
                 self.spinner.start();
                 self.status_label
                     .set_markup(&format!("<small>⌨️ {}</small>", message));
@@ -505,13 +512,13 @@ impl TranscriptionDialog {
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(false);
             }
-            TranscriptionState::Error => {
+            Error => {
                 self.spinner.stop();
                 self.status_label
                     .set_markup(&format!("<small>❌ {}</small>", message));
                 self.level_bar.set_visible(false);
             }
-            TranscriptionState::Idle => {
+            Idle => {
                 self.spinner.stop();
                 self.level_bar.set_visible(false);
             }
@@ -558,8 +565,9 @@ impl TranscriptionDialog {
     pub fn get_current_text(&self) -> String {
         let current_state = *self.state.lock().unwrap();
 
+        use TranscriptionState::*;
         match current_state {
-            TranscriptionState::Reviewing => {
+            Reviewing => {
                 // Get text from editable view
                 let buffer = self.text_view.buffer();
                 buffer

@@ -5,8 +5,9 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
+#[value(rename_all = "lowercase")]
 pub enum MultiSlotHandler {
     None,
     Kitty,
@@ -172,11 +173,12 @@ async fn handle_client(
                 }
 
                 // Send response
+                use DaemonCommand::*;
                 let response = match command {
-                    DaemonCommand::Start { .. } => "OK: started\n",
-                    DaemonCommand::Stop { .. } => "OK: stopped\n",
-                    DaemonCommand::Status => "OK: running\n",
-                    DaemonCommand::Quit => {
+                    Start { .. } => "OK: started\n",
+                    Stop { .. } => "OK: stopped\n",
+                    Status => "OK: running\n",
+                    Quit => {
                         writer.write_all(b"OK: quitting\n").await?;
                         break;
                     }
