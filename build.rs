@@ -6,8 +6,8 @@ fn main() {
     let cxxflags = env::var("CXXFLAGS").unwrap_or_else(|_| String::from("(not set)"));
     let ldflags = env::var("LDFLAGS").unwrap_or_else(|_| String::from("(not set)"));
     let rustflags = env::var("RUSTFLAGS").unwrap_or_else(|_| String::from("(not set)"));
-    let cargo_profile_release_lto = env::var("CARGO_PROFILE_RELEASE_LTO")
-        .unwrap_or_else(|_| String::from("(not set)"));
+    let cargo_profile_release_lto =
+        env::var("CARGO_PROFILE_RELEASE_LTO").unwrap_or_else(|_| String::from("(not set)"));
     let cargo_profile_release_codegen_units = env::var("CARGO_PROFILE_RELEASE_CODEGEN_UNITS")
         .unwrap_or_else(|_| String::from("(not set)"));
 
@@ -22,8 +22,14 @@ fn main() {
     println!("cargo:rustc-env=BUILD_CXXFLAGS={}", cxxflags);
     println!("cargo:rustc-env=BUILD_LDFLAGS={}", ldflags);
     println!("cargo:rustc-env=BUILD_RUSTFLAGS={}", rustflags);
-    println!("cargo:rustc-env=BUILD_CARGO_PROFILE_RELEASE_LTO={}", cargo_profile_release_lto);
-    println!("cargo:rustc-env=BUILD_CARGO_PROFILE_RELEASE_CODEGEN_UNITS={}", cargo_profile_release_codegen_units);
+    println!(
+        "cargo:rustc-env=BUILD_CARGO_PROFILE_RELEASE_LTO={}",
+        cargo_profile_release_lto
+    );
+    println!(
+        "cargo:rustc-env=BUILD_CARGO_PROFILE_RELEASE_CODEGEN_UNITS={}",
+        cargo_profile_release_codegen_units
+    );
     println!("cargo:rustc-env=BUILD_OPT_LEVEL={}", opt_level);
     println!("cargo:rustc-env=BUILD_PROFILE={}", profile);
     println!("cargo:rustc-env=BUILD_DEBUG={}", debug);

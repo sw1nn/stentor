@@ -53,7 +53,8 @@ impl SourceMuteManager {
                     tracing::debug!("PulseAudio context ready");
                     break;
                 }
-                libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
+                libpulse_binding::context::State::Failed
+                | libpulse_binding::context::State::Terminated => {
                     anyhow::bail!("PulseAudio context failed");
                 }
                 _ => {}
@@ -76,7 +77,8 @@ impl SourceMuteManager {
 
         // Process events until we have server info (use blocking iterations)
         for i in 0..50 {
-            match mainloop.iterate(true) {  // true = blocking
+            match mainloop.iterate(true) {
+                // true = blocking
                 IterateResult::Quit(_) | IterateResult::Err(_) => {
                     tracing::debug!("Mainloop quit or error at iteration {}", i);
                     break;
@@ -90,7 +92,9 @@ impl SourceMuteManager {
             }
         }
 
-        let source_name = default_source_name.borrow().clone()
+        let source_name = default_source_name
+            .borrow()
+            .clone()
             .ok_or_else(|| anyhow::anyhow!("Failed to get default source name from PulseAudio"))?;
 
         tracing::debug!("Looking for source: {}", source_name);
@@ -100,27 +104,35 @@ impl SourceMuteManager {
         let result_clone = Rc::clone(&result);
 
         let introspect = context.introspect();
-        introspect.get_source_info_by_name(&source_name, move |list_result| {
-            match list_result {
-                libpulse_binding::callbacks::ListResult::Item(source_info) => {
-                    let index = source_info.index;
-                    let is_muted = source_info.mute;
-                    let name = source_info.name.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "unknown".to_string());
-                    tracing::debug!("Found source '{}' with index: {}, muted: {}", name, index, is_muted);
-                    *result_clone.borrow_mut() = Some((index, is_muted));
-                }
-                libpulse_binding::callbacks::ListResult::End => {
-                    tracing::debug!("Source info list end");
-                }
-                libpulse_binding::callbacks::ListResult::Error => {
-                    tracing::error!("Error getting source info");
-                }
+        introspect.get_source_info_by_name(&source_name, move |list_result| match list_result {
+            libpulse_binding::callbacks::ListResult::Item(source_info) => {
+                let index = source_info.index;
+                let is_muted = source_info.mute;
+                let name = source_info
+                    .name
+                    .as_ref()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "unknown".to_string());
+                tracing::debug!(
+                    "Found source '{}' with index: {}, muted: {}",
+                    name,
+                    index,
+                    is_muted
+                );
+                *result_clone.borrow_mut() = Some((index, is_muted));
+            }
+            libpulse_binding::callbacks::ListResult::End => {
+                tracing::debug!("Source info list end");
+            }
+            libpulse_binding::callbacks::ListResult::Error => {
+                tracing::error!("Error getting source info");
             }
         });
 
         // Process events until we have the result (use blocking iterations)
         for i in 0..50 {
-            match mainloop.iterate(true) {  // true = blocking
+            match mainloop.iterate(true) {
+                // true = blocking
                 IterateResult::Quit(_) | IterateResult::Err(_) => {
                     tracing::debug!("Mainloop quit or error at iteration {}", i);
                     break;
@@ -135,7 +147,8 @@ impl SourceMuteManager {
         }
 
         let source_info = *result.borrow();
-        source_info.ok_or_else(|| anyhow::anyhow!("Failed to get source info for '{}'", source_name))
+        source_info
+            .ok_or_else(|| anyhow::anyhow!("Failed to get source info for '{}'", source_name))
     }
 
     /// Set mute state for the source
@@ -159,7 +172,8 @@ impl SourceMuteManager {
 
             match context.get_state() {
                 libpulse_binding::context::State::Ready => break,
-                libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
+                libpulse_binding::context::State::Failed
+                | libpulse_binding::context::State::Terminated => {
                     anyhow::bail!("PulseAudio context failed");
                 }
                 _ => {}
@@ -170,16 +184,21 @@ impl SourceMuteManager {
         let done_clone = Rc::clone(&done);
 
         let mut introspector = context.introspect();
-        introspector.set_source_mute_by_index(source_index, mute, Some(Box::new(move |success| {
-            *done_clone.borrow_mut() = true;
-            if !success {
-                tracing::error!("Failed to set mute state");
-            }
-        })));
+        introspector.set_source_mute_by_index(
+            source_index,
+            mute,
+            Some(Box::new(move |success| {
+                *done_clone.borrow_mut() = true;
+                if !success {
+                    tracing::error!("Failed to set mute state");
+                }
+            })),
+        );
 
         // Process events until operation completes (use blocking iterations)
         for _ in 0..50 {
-            match mainloop.iterate(true) {  // true = blocking
+            match mainloop.iterate(true) {
+                // true = blocking
                 IterateResult::Quit(_) | IterateResult::Err(_) => break,
                 IterateResult::Success(_) => {}
             }
@@ -189,7 +208,11 @@ impl SourceMuteManager {
             }
         }
 
-        tracing::debug!("Set source {} to {}", source_index, if mute { "muted" } else { "unmuted" });
+        tracing::debug!(
+            "Set source {} to {}",
+            source_index,
+            if mute { "muted" } else { "unmuted" }
+        );
         Ok(())
     }
 }

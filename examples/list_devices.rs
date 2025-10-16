@@ -57,8 +57,8 @@ struct SourceInfo {
 
 fn list_sources() -> Result<Vec<SourceInfo>, Box<dyn std::error::Error>> {
     let mut mainloop = Mainloop::new().ok_or("Failed to create mainloop")?;
-    let mut context = PulseContext::new(&mainloop, "list-sources")
-        .ok_or("Failed to create context")?;
+    let mut context =
+        PulseContext::new(&mainloop, "list-sources").ok_or("Failed to create context")?;
 
     context.connect(None, ContextFlagSet::NOFLAGS, None)?;
 
@@ -129,8 +129,8 @@ fn list_sources() -> Result<Vec<SourceInfo>, Box<dyn std::error::Error>> {
 
 fn get_default_source() -> Result<SourceInfo, Box<dyn std::error::Error>> {
     let mut mainloop = Mainloop::new().ok_or("Failed to create mainloop")?;
-    let mut context = PulseContext::new(&mainloop, "list-sources")
-        .ok_or("Failed to create context")?;
+    let mut context =
+        PulseContext::new(&mainloop, "list-sources").ok_or("Failed to create context")?;
 
     context.connect(None, ContextFlagSet::NOFLAGS, None)?;
 
@@ -213,7 +213,10 @@ fn get_default_source() -> Result<SourceInfo, Box<dyn std::error::Error>> {
 
     mainloop.stop();
 
-    source_info.borrow().clone().ok_or("Failed to get source info".into())
+    source_info
+        .borrow()
+        .clone()
+        .ok_or("Failed to get source info".into())
 }
 
 impl Clone for SourceInfo {

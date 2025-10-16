@@ -1,5 +1,8 @@
 use gtk4::prelude::*;
-use gtk4::{gdk, glib, Application, ApplicationWindow, Box, Label, LevelBar, Orientation, Spinner, TextView, ScrolledWindow};
+use gtk4::{
+    Application, ApplicationWindow, Box, Label, LevelBar, Orientation, ScrolledWindow, Spinner,
+    TextView, gdk, glib,
+};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone)]
@@ -11,8 +14,8 @@ pub struct DestinationSlot {
 impl DestinationSlot {
     pub fn inactive(_slot_num: usize) -> Self {
         Self {
-            label: String::new(),  // Empty label for inactive slots
-            color_hex: "transparent".to_string(),  // Transparent background for inactive slots
+            label: String::new(),                 // Empty label for inactive slots
+            color_hex: "transparent".to_string(), // Transparent background for inactive slots
         }
     }
 
@@ -79,14 +82,14 @@ impl TranscriptionDialog {
         level_bar.set_max_value(0.1);
         level_bar.set_value(0.0);
         level_bar.set_visible(true);
-        level_bar.set_size_request(-1, 2);  // Full width, 2px height
+        level_bar.set_size_request(-1, 2); // Full width, 2px height
         level_bar.set_vexpand(false);
         level_bar.set_valign(gtk4::Align::Start);
         main_box.append(&level_bar);
 
         // Destination slots bar (colored labels for Kitty mode)
         let destination_box = Box::new(Orientation::Horizontal, 0);
-        destination_box.set_visible(false);  // Hidden by default, shown in Kitty mode
+        destination_box.set_visible(false); // Hidden by default, shown in Kitty mode
         destination_box.set_homogeneous(true);
         let mut destination_labels = Vec::new();
         for _ in 0..4 {
@@ -108,7 +111,7 @@ impl TranscriptionDialog {
         // Text preview label (shown during recording/processing)
         let text_preview = Label::new(None);
         text_preview.set_wrap(true);
-        text_preview.set_xalign(0.0);  // Left align
+        text_preview.set_xalign(0.0); // Left align
         text_preview.set_markup("<span foreground='#888888'>Listening...</span>");
         text_preview.set_vexpand(true);
         text_preview.set_valign(gtk4::Align::Start);
@@ -148,13 +151,14 @@ impl TranscriptionDialog {
         // Status label (small text in status bar)
         let status_label = Label::new(None);
         status_label.set_markup("<small>Initializing...</small>");
-        status_label.set_xalign(0.0);  // Left align
+        status_label.set_xalign(0.0); // Left align
         status_box.append(&status_label);
 
         // Microphone info label (right-aligned in status bar)
         let mic_label = Label::new(None);
-        mic_label.set_markup("<small><span foreground='#888888'>Detecting source...</span></small>");
-        mic_label.set_xalign(1.0);  // Right align
+        mic_label
+            .set_markup("<small><span foreground='#888888'>Detecting source...</span></small>");
+        mic_label.set_xalign(1.0); // Right align
         mic_label.set_hexpand(true);
         status_box.append(&mic_label);
 
@@ -205,10 +209,9 @@ impl TranscriptionDialog {
                 css_provider.load_from_data(&css);
 
                 // Apply CSS to the label
-                label.style_context().add_provider(
-                    &css_provider,
-                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                );
+                label
+                    .style_context()
+                    .add_provider(&css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
             }
         }
 
@@ -314,7 +317,9 @@ impl TranscriptionDialog {
                         // Send text from editable view
                         if let Some(ref callback) = on_send_text {
                             let buffer = text_view.buffer();
-                            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                            let text = buffer
+                                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                .to_string();
                             callback(text, 0);
                         }
                     }
@@ -345,7 +350,9 @@ impl TranscriptionDialog {
                             // Send text from editable view to specific slot
                             if let Some(ref callback) = on_send_text {
                                 let buffer = text_view.buffer();
-                                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                                let text = buffer
+                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                    .to_string();
                                 callback(text, dest);
                             }
                         }
@@ -405,7 +412,9 @@ impl TranscriptionDialog {
                         // Send text from editable view
                         if let Some(ref callback) = on_send_text {
                             let buffer = text_view_clone.buffer();
-                            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                            let text = buffer
+                                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                .to_string();
                             callback(text, 0);
                         }
                     }
@@ -436,7 +445,9 @@ impl TranscriptionDialog {
                             // Send text from editable view to specific slot
                             if let Some(ref callback) = on_send_text {
                                 let buffer = text_view_clone.buffer();
-                                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                                let text = buffer
+                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                    .to_string();
                                 callback(text, dest);
                             }
                         }
@@ -458,7 +469,8 @@ impl TranscriptionDialog {
         match state {
             TranscriptionState::Recording => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<small>{}</small>", message));
+                self.status_label
+                    .set_markup(&format!("<small>{}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
                 tracing::debug!("Level bar updated: {}", level);
@@ -467,11 +479,12 @@ impl TranscriptionDialog {
             }
             TranscriptionState::Processing => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<small>⚙️ {}</small>", message));
+                self.status_label
+                    .set_markup(&format!("<small>⚙️ {}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
-                self.text_preview.set_visible(true);  // Show text preview during processing
-                self.scrolled.set_visible(false);  // Hide editable text view during processing
+                self.text_preview.set_visible(true); // Show text preview during processing
+                self.scrolled.set_visible(false); // Hide editable text view during processing
             }
             TranscriptionState::Reviewing => {
                 self.spinner.stop();
@@ -482,18 +495,20 @@ impl TranscriptionDialog {
                 self.level_bar.set_visible(false);
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(true);
-                self.text_view.set_editable(true);  // Editable during reviewing
+                self.text_view.set_editable(true); // Editable during reviewing
             }
             TranscriptionState::Typing => {
                 self.spinner.start();
-                self.status_label.set_markup(&format!("<small>⌨️ {}</small>", message));
+                self.status_label
+                    .set_markup(&format!("<small>⌨️ {}</small>", message));
                 self.level_bar.set_visible(false);
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(false);
             }
             TranscriptionState::Error => {
                 self.spinner.stop();
-                self.status_label.set_markup(&format!("<small>❌ {}</small>", message));
+                self.status_label
+                    .set_markup(&format!("<small>❌ {}</small>", message));
                 self.level_bar.set_visible(false);
             }
             TranscriptionState::Idle => {
@@ -547,7 +562,9 @@ impl TranscriptionDialog {
             TranscriptionState::Reviewing => {
                 // Get text from editable view
                 let buffer = self.text_view.buffer();
-                buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string()
+                buffer
+                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                    .to_string()
             }
             _ => {
                 // Get text from preview label

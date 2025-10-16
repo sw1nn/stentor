@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use libpulse_binding::callbacks::ListResult;
 use libpulse_binding::context::{Context as PulseContext, FlagSet as ContextFlagSet};
+use libpulse_binding::def::BufferAttr;
 use libpulse_binding::mainloop::threaded::Mainloop;
 use libpulse_binding::sample::{Format, Spec};
-use libpulse_simple_binding::Simple;
 use libpulse_binding::stream::Direction;
-use libpulse_binding::def::BufferAttr;
+use libpulse_simple_binding::Simple;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
@@ -162,15 +162,16 @@ impl AudioRecorder {
 
         // Create simple PulseAudio connection
         let simple = Simple::new(
-            None,                           // Use default server
-            "stentor",                      // Application name
-            Direction::Record,              // Record direction
-            self.source_name.as_deref(),    // Source name (None for default)
-            "Audio Recording",              // Stream description
-            &spec,                          // Sample spec
-            None,                           // Channel map (None for default)
-            Some(&buffer_attr),             // Buffer attributes
-        ).context("Failed to create PulseAudio simple connection")?;
+            None,                        // Use default server
+            "stentor",                   // Application name
+            Direction::Record,           // Record direction
+            self.source_name.as_deref(), // Source name (None for default)
+            "Audio Recording",           // Stream description
+            &spec,                       // Sample spec
+            None,                        // Channel map (None for default)
+            Some(&buffer_attr),          // Buffer attributes
+        )
+        .context("Failed to create PulseAudio simple connection")?;
 
         tracing::info!("PulseAudio simple connection created and ready");
 
@@ -270,12 +271,10 @@ impl VoiceActivityDetector {
         silence_chunks: usize,
         speech_chunks: usize,
     ) -> VadResult {
-        let stop_silence_chunk_threshold =
-            (self.stop_silence_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
-                as usize;
-        let min_speech_chunk_threshold =
-            (self.min_speech_duration * self.sample_rate as f32 / self.samples_per_chunk as f32)
-                as usize;
+        let stop_silence_chunk_threshold = (self.stop_silence_duration * self.sample_rate as f32
+            / self.samples_per_chunk as f32) as usize;
+        let min_speech_chunk_threshold = (self.min_speech_duration * self.sample_rate as f32
+            / self.samples_per_chunk as f32) as usize;
 
         let is_speech = rms > self.silence_threshold;
         let has_minimum_speech = speech_chunks >= min_speech_chunk_threshold;
@@ -368,7 +367,8 @@ fn get_pulse_source_description(source_name: &str) -> Result<String> {
                 ready = true;
                 break;
             }
-            libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
+            libpulse_binding::context::State::Failed
+            | libpulse_binding::context::State::Terminated => {
                 mainloop.unlock();
                 mainloop.stop();
                 anyhow::bail!("PulseAudio context failed");
@@ -436,7 +436,8 @@ fn get_pulse_default_source_description() -> Result<String> {
                 ready = true;
                 break;
             }
-            libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
+            libpulse_binding::context::State::Failed
+            | libpulse_binding::context::State::Terminated => {
                 mainloop.unlock();
                 mainloop.stop();
                 anyhow::bail!("PulseAudio context failed");

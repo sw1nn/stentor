@@ -81,7 +81,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
         )
         .init();
 
@@ -105,14 +105,12 @@ async fn main() -> Result<()> {
     };
 
     // Connect to daemon
-    let mut stream = UnixStream::connect(&socket_path)
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to connect to daemon at {}. Is the daemon running?",
-                socket_path.display()
-            )
-        })?;
+    let mut stream = UnixStream::connect(&socket_path).await.with_context(|| {
+        format!(
+            "Failed to connect to daemon at {}. Is the daemon running?",
+            socket_path.display()
+        )
+    })?;
 
     // Build command
     let command = match command_name.as_str() {
@@ -148,9 +146,8 @@ async fn main() -> Result<()> {
     };
 
     // Serialize to JSON
-    let command_str = serde_json::to_string(&command)
-        .context("Failed to serialize command")?
-        + "\n";
+    let command_str =
+        serde_json::to_string(&command).context("Failed to serialize command")? + "\n";
 
     stream
         .write_all(command_str.as_bytes())

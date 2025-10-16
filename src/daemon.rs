@@ -38,7 +38,6 @@ pub enum DaemonCommand {
     Quit,
 }
 
-
 pub struct DaemonServer {
     socket_path: PathBuf,
     listener: Option<UnixListener>,
@@ -48,15 +47,20 @@ impl DaemonServer {
     pub fn new(socket_path: PathBuf) -> Result<Self> {
         // Remove existing socket if it exists and is actually a socket
         if socket_path.exists() {
-            let metadata = std::fs::metadata(&socket_path)
-                .with_context(|| format!("Failed to get metadata for: {}", socket_path.display()))?;
+            let metadata = std::fs::metadata(&socket_path).with_context(|| {
+                format!("Failed to get metadata for: {}", socket_path.display())
+            })?;
 
             #[cfg(unix)]
             {
                 use std::os::unix::fs::FileTypeExt;
                 if metadata.file_type().is_socket() {
-                    std::fs::remove_file(&socket_path)
-                        .with_context(|| format!("Failed to remove existing socket: {}", socket_path.display()))?;
+                    std::fs::remove_file(&socket_path).with_context(|| {
+                        format!(
+                            "Failed to remove existing socket: {}",
+                            socket_path.display()
+                        )
+                    })?;
                 } else {
                     anyhow::bail!("Path exists but is not a socket: {}", socket_path.display());
                 }
@@ -64,8 +68,12 @@ impl DaemonServer {
 
             #[cfg(not(unix))]
             {
-                std::fs::remove_file(&socket_path)
-                    .with_context(|| format!("Failed to remove existing socket: {}", socket_path.display()))?;
+                std::fs::remove_file(&socket_path).with_context(|| {
+                    format!(
+                        "Failed to remove existing socket: {}",
+                        socket_path.display()
+                    )
+                })?;
             }
         }
 
@@ -85,11 +93,10 @@ impl DaemonServer {
         Ok(())
     }
 
-    pub async fn run(
-        &mut self,
-        command_tx: mpsc::Sender<DaemonCommand>,
-    ) -> Result<()> {
-        let listener = self.listener.as_ref()
+    pub async fn run(&mut self, command_tx: mpsc::Sender<DaemonCommand>) -> Result<()> {
+        let listener = self
+            .listener
+            .as_ref()
             .context("Server not bound - call bind() first")?;
 
         loop {
@@ -123,7 +130,10 @@ impl Drop for DaemonServer {
                             tracing::error!("Failed to remove socket file: {}", e);
                         }
                     } else {
-                        tracing::warn!("Path exists but is not a socket, not removing: {}", self.socket_path.display());
+                        tracing::warn!(
+                            "Path exists but is not a socket, not removing: {}",
+                            self.socket_path.display()
+                        );
                     }
                 }
 
@@ -246,10 +256,7 @@ mod tests {
         assert_eq!(cmd, parsed);
 
         // Test other commands
-        let commands = vec![
-            DaemonCommand::Status,
-            DaemonCommand::Quit,
-        ];
+        let commands = vec![DaemonCommand::Status, DaemonCommand::Quit];
 
         for cmd in commands {
             let json = serde_json::to_string(&cmd).unwrap();
