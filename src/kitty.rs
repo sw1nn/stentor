@@ -59,8 +59,8 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
 
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
         .context("Failed to create abstract socket address")?;
-    let mut stream = UnixStream::connect_addr(&addr)
-        .context("Failed to connect to Kitty socket")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
     tracing::debug!("Connected to socket: @{}", socket_name);
 
     // Use DCS escape sequence format: \x1bP@kitty-cmd<JSON>\x1b\\
@@ -82,7 +82,10 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
                 tracing::debug!("Read {} bytes", n);
                 resp.extend_from_slice(&buffer[..n]);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 tracing::debug!("Read timeout - assuming no more data");
                 break;
             }
@@ -100,10 +103,14 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
         if let Some(end) = response_str[json_start..].find("\x1b\\") {
             let json_str = &response_str[json_start..json_start + end];
             tracing::debug!("Response JSON: {}", json_str);
-            let response: Value = serde_json::from_str(json_str)
-                .context("Failed to parse Kitty response")?;
+            let response: Value =
+                serde_json::from_str(json_str).context("Failed to parse Kitty response")?;
 
-            if !response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if !response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 anyhow::bail!("Kitty command failed: {}", json_str);
             }
         }
@@ -116,8 +123,8 @@ pub fn list_kitty_windows() -> Result<Value> {
     let socket_name = get_kitty_socket_name()?;
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
         .context("Failed to create abstract socket address")?;
-    let mut stream = UnixStream::connect_addr(&addr)
-        .context("Failed to connect to Kitty socket")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
     tracing::debug!("Connected to socket for listing windows: @{}", socket_name);
 
     let cmd = r#"{"cmd":"ls","version":[0,37,2]}"#;
@@ -139,7 +146,10 @@ pub fn list_kitty_windows() -> Result<Value> {
                 tracing::debug!("Read {} bytes", n);
                 resp.extend_from_slice(&buffer[..n]);
             }
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 tracing::debug!("Read timeout - assuming no more data");
                 break;
             }
@@ -158,14 +168,18 @@ pub fn list_kitty_windows() -> Result<Value> {
             let json_str = &response_str[json_start..json_start + end];
             tracing::debug!("Response JSON length: {} bytes", json_str.len());
 
-            let response: Value = serde_json::from_str(json_str)
-                .context("Failed to parse Kitty response")?;
+            let response: Value =
+                serde_json::from_str(json_str).context("Failed to parse Kitty response")?;
 
-            if response.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if response
+                .get("ok")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 if let Some(data) = response.get("data") {
                     if let Some(data_str) = data.as_str() {
-                        let parsed_data: Value = serde_json::from_str(data_str)
-                            .context("Failed to parse Kitty data")?;
+                        let parsed_data: Value =
+                            serde_json::from_str(data_str).context("Failed to parse Kitty data")?;
                         return Ok(parsed_data);
                     } else {
                         return Ok(data.clone());
@@ -190,17 +204,31 @@ pub fn find_claude_windows(data: &Value) -> Vec<ClaudeWindow> {
                 for tab in tabs {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
-                            if let Some(processes) = window.get("foreground_processes").and_then(|p| p.as_array()) {
+                            if let Some(processes) = window
+                                .get("foreground_processes")
+                                .and_then(|p| p.as_array())
+                            {
                                 for process in processes {
-                                    if let Some(cmdline) = process.get("cmdline").and_then(|c| c.as_array()) {
-                                        if let Some(first_arg) = cmdline.get(0).and_then(|a| a.as_str()) {
+                                    if let Some(cmdline) =
+                                        process.get("cmdline").and_then(|c| c.as_array())
+                                    {
+                                        if let Some(first_arg) =
+                                            cmdline.get(0).and_then(|a| a.as_str())
+                                        {
                                             if first_arg == "claude" {
-                                                if let Some(id) = window.get("id").and_then(|i| i.as_u64()) {
-                                                    let cwd = window.get("cwd")
+                                                if let Some(id) =
+                                                    window.get("id").and_then(|i| i.as_u64())
+                                                {
+                                                    let cwd = window
+                                                        .get("cwd")
                                                         .and_then(|c| c.as_str())
                                                         .unwrap_or("unknown")
                                                         .to_string();
-                                                    tracing::debug!("Found Claude window: id={}, cwd={}", id, cwd);
+                                                    tracing::debug!(
+                                                        "Found Claude window: id={}, cwd={}",
+                                                        id,
+                                                        cwd
+                                                    );
                                                     claude_windows.push(ClaudeWindow { id, cwd });
                                                 }
                                             }
@@ -289,16 +317,14 @@ pub fn set_background_color(color: &str, window_id: u64) -> Result<()> {
     send_kitty_command(cmd)
 }
 
+#[allow(dead_code)]
 pub fn set_window_env_var(var_name: &str, var_value: &str, window_id: u64) -> Result<()> {
     let match_window = Some(format!("id:{}", window_id));
 
     let mut vars = HashMap::new();
     vars.insert(var_name.to_string(), var_value.to_string());
 
-    let payload = SetUserVarsPayload {
-        match_window,
-        vars,
-    };
+    let payload = SetUserVarsPayload { match_window, vars };
 
     let cmd = KittyCommand {
         cmd: "set-user-vars".to_string(),
@@ -307,4 +333,75 @@ pub fn set_window_env_var(var_name: &str, var_value: &str, window_id: u64) -> Re
     };
 
     send_kitty_command(cmd)
+}
+
+/// Set both background color and environment variable in a single socket connection
+/// This is much faster than calling set_background_color and set_window_env_var separately
+/// Fire-and-forget style: sends both commands without waiting for responses
+pub fn set_window_color_and_env(
+    color: &str,
+    env_var_name: &str,
+    env_var_value: &str,
+    window_id: u64,
+) -> Result<()> {
+    let socket_name = get_kitty_socket_name()?;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
+        .context("Failed to create abstract socket address")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
+
+    let match_window = Some(format!("id:{}", window_id));
+
+    // Build set-colors command
+    let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
+    let (fg_r, fg_g, fg_b) = get_contrast_color(color);
+
+    let mut colors = HashMap::new();
+    colors.insert("background".to_string(), rgb_to_int(bg_r, bg_g, bg_b));
+    colors.insert("foreground".to_string(), rgb_to_int(fg_r, fg_g, fg_b));
+
+    let color_payload = SetColorsPayload {
+        colors: Some(colors),
+        match_window: match_window.clone(),
+        reset: None,
+    };
+
+    let color_cmd = KittyCommand {
+        cmd: "set-colors".to_string(),
+        version: Some(vec![0, 26, 0]),
+        payload: Some(color_payload),
+    };
+
+    // Build set-user-vars command
+    let mut vars = HashMap::new();
+    vars.insert(env_var_name.to_string(), env_var_value.to_string());
+
+    let env_payload = SetUserVarsPayload {
+        match_window,
+        vars,
+    };
+
+    let env_cmd = KittyCommand {
+        cmd: "set-user-vars".to_string(),
+        version: Some(vec![0, 35, 0]),
+        payload: Some(env_payload),
+    };
+
+    // Serialize both commands
+    let color_json = serde_json::to_string(&color_cmd)?;
+    let env_json = serde_json::to_string(&env_cmd)?;
+
+    tracing::debug!("Sending batched commands for window {} (fire-and-forget)", window_id);
+
+    // Send both commands without waiting for responses (fire-and-forget)
+    let color_encoded = format!("\x1bP@kitty-cmd{}\x1b\\", color_json);
+    stream.write_all(color_encoded.as_bytes())?;
+
+    let env_encoded = format!("\x1bP@kitty-cmd{}\x1b\\", env_json);
+    stream.write_all(env_encoded.as_bytes())?;
+
+    stream.flush()?;
+
+    tracing::debug!("Batched commands sent for window {}", window_id);
+    Ok(())
 }

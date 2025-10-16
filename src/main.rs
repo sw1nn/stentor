@@ -26,7 +26,7 @@ use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivity
 use config::Config;
 use daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use dialog::{DestinationSlot, TranscriptionDialog, TranscriptionState};
-use kitty::{find_claude_windows, list_kitty_windows, set_background_color, set_window_env_var};
+use kitty::{find_claude_windows, list_kitty_windows, set_background_color, set_window_color_and_env};
 use palette::Palette;
 use source_mute::SourceMuteManager;
 use transcription::Transcriber;
@@ -452,34 +452,35 @@ async fn main() -> Result<()> {
                                         let claude_windows = find_claude_windows(&data);
                                         tracing::info!("Background: Found {} Claude windows", claude_windows.len());
 
-                                        // Always build and send destination slots (even if empty) to update from initial state
                                         let palette = Palette::new("#1e1e2e");
                                         let mut destinations = Vec::new();
                                         let mut modified_window_ids = Vec::new();
 
-                                        // Set colors and env vars, build destination slots for found windows
+                                        // Process each found window and update UI incrementally
                                         for (i, window) in claude_windows.iter().enumerate().take(4) {
                                             let slot_num = i + 1;
                                             if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                                                // Set background color
-                                                if let Err(e) = set_background_color(color_hex, window.id) {
-                                                    tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
+                                                // Set background color and env var in one batched call
+                                                let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
+                                                if let Err(e) = set_window_color_and_env(color_hex, &env_var_name, "1", window.id) {
+                                                    tracing::warn!("Failed to set color and env var for window {}: {}", window.id, e);
                                                 } else {
-                                                    tracing::debug!("Set background color {} for window {}", color_hex, window.id);
+                                                    tracing::debug!("Set color {} and env var {} for window {}", color_hex, env_var_name, window.id);
                                                     modified_window_ids.push(window.id);
                                                 }
 
-                                                // Set environment variable
-                                                let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
-                                                if let Err(e) = set_window_env_var(&env_var_name, "1", window.id) {
-                                                    tracing::warn!("Failed to set env var {} for window {}: {}", env_var_name, window.id, e);
-                                                } else {
-                                                    tracing::debug!("Set env var {} for window {}", env_var_name, window.id);
-                                                }
-
-                                                // Create destination slot with label
+                                                // Create destination slot with label and send immediately
                                                 let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
                                                 destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+
+                                                // Update UI incrementally - send current state after each window is processed
+                                                let mut current_destinations = destinations.clone();
+                                                // Add remaining slots as inactive
+                                                for j in (i + 1)..4 {
+                                                    current_destinations.push(DestinationSlot::inactive(j + 1));
+                                                }
+                                                tracing::debug!("Background: Sending incremental update for slot {}", slot_num);
+                                                let _ = ui_tx_for_kitty.send_blocking(UIMessage::SetDestinations(current_destinations));
                                             }
                                         }
 
@@ -488,15 +489,8 @@ async fn main() -> Result<()> {
                                             let _ = ui_tx_for_kitty.send_blocking(UIMessage::StoreKittyWindowIds(modified_window_ids));
                                         }
 
-                                        // Fill remaining slots as inactive (greyed out)
-                                        for i in claude_windows.len()..4 {
-                                            let slot_num = i + 1;
-                                            destinations.push(DestinationSlot::inactive(slot_num));
-                                        }
-
-                                        // Send updated destinations to UI
-                                        tracing::info!("Background: Sending {} destination slots to UI ({} with labels)", destinations.len(), claude_windows.len());
-                                        let _ = ui_tx_for_kitty.send_blocking(UIMessage::SetDestinations(destinations));
+                                        // If no windows were found, the initial inactive slots are already showing
+                                        tracing::info!("Background: Finished processing {} Claude windows", claude_windows.len());
                                     }
                                     Err(e) => {
                                         tracing::warn!("Background: Failed to list Kitty windows: {}", e);
