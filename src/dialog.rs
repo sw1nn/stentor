@@ -9,10 +9,10 @@ pub struct DestinationSlot {
 }
 
 impl DestinationSlot {
-    pub fn empty(slot_num: usize, color_hex: String) -> Self {
+    pub fn inactive(_slot_num: usize) -> Self {
         Self {
-            label: format!("Ctrl+{}: Empty", slot_num),
-            color_hex,
+            label: String::new(),  // Empty label for inactive slots
+            color_hex: "transparent".to_string(),  // Transparent background for inactive slots
         }
     }
 

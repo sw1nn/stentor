@@ -383,6 +383,14 @@ async fn main() -> Result<()> {
 
                         // Setup multi-slot handler in background if requested
                         if multi_slot_handler == MultiSlotHandler::Kitty {
+                            // Immediately show inactive slots so Ctrl+1-4 labels are visible
+                            let mut inactive_destinations = Vec::new();
+                            for slot_num in 1..=4 {
+                                inactive_destinations.push(DestinationSlot::inactive(slot_num));
+                            }
+                            let _ = ui_tx.send_blocking(UIMessage::SetDestinations(inactive_destinations));
+                            tracing::info!("Initialized 4 inactive destination slots");
+
                             let ui_tx_for_kitty = ui_tx.clone();
                             thread::spawn(move || {
                                 tracing::info!("Background: Starting Kitty window discovery");
@@ -392,52 +400,48 @@ async fn main() -> Result<()> {
                                         let claude_windows = find_claude_windows(&data);
                                         tracing::info!("Background: Found {} Claude windows", claude_windows.len());
 
-                                        if !claude_windows.is_empty() {
-                                            let palette = Palette::new("#1e1e2e");
-                                            let mut destinations = Vec::new();
+                                        // Always build and send destination slots (even if empty) to update from initial state
+                                        let palette = Palette::new("#1e1e2e");
+                                        let mut destinations = Vec::new();
 
-                                            // Set colors and env vars, build destination slots
-                                            for (i, window) in claude_windows.iter().enumerate().take(4) {
-                                                let slot_num = i + 1;
-                                                if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                                                    // Set background color
-                                                    if let Err(e) = set_background_color(color_hex, window.id) {
-                                                        tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
-                                                    } else {
-                                                        tracing::debug!("Set background color {} for window {}", color_hex, window.id);
-                                                    }
-
-                                                    // Set environment variable
-                                                    let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
-                                                    if let Err(e) = set_window_env_var(&env_var_name, "1", window.id) {
-                                                        tracing::warn!("Failed to set env var {} for window {}: {}", env_var_name, window.id, e);
-                                                    } else {
-                                                        tracing::debug!("Set env var {} for window {}", env_var_name, window.id);
-                                                    }
-
-                                                    // Create destination slot with label
-                                                    let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
-                                                    destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+                                        // Set colors and env vars, build destination slots for found windows
+                                        for (i, window) in claude_windows.iter().enumerate().take(4) {
+                                            let slot_num = i + 1;
+                                            if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                                                // Set background color
+                                                if let Err(e) = set_background_color(color_hex, window.id) {
+                                                    tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
+                                                } else {
+                                                    tracing::debug!("Set background color {} for window {}", color_hex, window.id);
                                                 }
-                                            }
 
-                                            // Fill remaining slots as empty
-                                            for i in claude_windows.len()..4 {
-                                                let slot_num = i + 1;
-                                                if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                                                    destinations.push(DestinationSlot::empty(slot_num, color_hex.to_string()));
+                                                // Set environment variable
+                                                let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
+                                                if let Err(e) = set_window_env_var(&env_var_name, "1", window.id) {
+                                                    tracing::warn!("Failed to set env var {} for window {}: {}", env_var_name, window.id, e);
+                                                } else {
+                                                    tracing::debug!("Set env var {} for window {}", env_var_name, window.id);
                                                 }
-                                            }
 
-                                            // Send destinations to UI
-                                            tracing::info!("Background: Sending {} destination slots to UI", destinations.len());
-                                            let _ = ui_tx_for_kitty.send_blocking(UIMessage::SetDestinations(destinations));
-                                        } else {
-                                            tracing::info!("Background: No Claude windows found");
+                                                // Create destination slot with label
+                                                let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
+                                                destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+                                            }
                                         }
+
+                                        // Fill remaining slots as inactive (greyed out)
+                                        for i in claude_windows.len()..4 {
+                                            let slot_num = i + 1;
+                                            destinations.push(DestinationSlot::inactive(slot_num));
+                                        }
+
+                                        // Send updated destinations to UI
+                                        tracing::info!("Background: Sending {} destination slots to UI ({} with labels)", destinations.len(), claude_windows.len());
+                                        let _ = ui_tx_for_kitty.send_blocking(UIMessage::SetDestinations(destinations));
                                     }
                                     Err(e) => {
                                         tracing::warn!("Background: Failed to list Kitty windows: {}", e);
+                                        // Empty slots are already showing from initial setup, no need to update
                                     }
                                 }
                             });
