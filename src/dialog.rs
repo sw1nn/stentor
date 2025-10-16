@@ -2,6 +2,27 @@ use gtk4::prelude::*;
 use gtk4::{gdk, glib, Application, ApplicationWindow, Box, Label, LevelBar, Orientation, Spinner, TextView, ScrolledWindow};
 use std::sync::{Arc, Mutex};
 
+pub struct DestinationSlot {
+    pub label: String,
+    pub color_hex: String,
+}
+
+impl DestinationSlot {
+    pub fn empty(slot_num: usize, color_hex: String) -> Self {
+        Self {
+            label: format!("Ctrl+{}: Empty", slot_num),
+            color_hex,
+        }
+    }
+
+    pub fn with_label(slot_num: usize, label: String, color_hex: String) -> Self {
+        Self {
+            label: format!("Ctrl+{}: {}", slot_num, label),
+            color_hex,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranscriptionState {
     Idle,
@@ -24,10 +45,12 @@ pub struct TranscriptionDialog {
     text_view: TextView,
     scrolled: ScrolledWindow,
     text_preview: Label,
+    destination_labels: Vec<Label>,
+    destination_box: Box,
 
     // Callbacks
     on_manual_stop: Option<Arc<dyn Fn() + Send + Sync>>,
-    on_send_text: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    on_send_text: Option<Arc<dyn Fn(String, usize) + Send + Sync>>,
     on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
@@ -58,6 +81,20 @@ impl TranscriptionDialog {
         level_bar.set_vexpand(false);
         level_bar.set_valign(gtk4::Align::Start);
         main_box.append(&level_bar);
+
+        // Destination slots bar (colored labels for Kitty mode)
+        let destination_box = Box::new(Orientation::Horizontal, 0);
+        destination_box.set_visible(false);  // Hidden by default, shown in Kitty mode
+        destination_box.set_homogeneous(true);
+        let mut destination_labels = Vec::new();
+        for _ in 0..4 {
+            let label = Label::new(None);
+            label.set_markup("<small> </small>");
+            label.set_size_request(-1, 24);
+            destination_box.append(&label);
+            destination_labels.push(label);
+        }
+        main_box.append(&destination_box);
 
         // Content area with padding
         let content_box = Box::new(Orientation::Vertical, 10);
@@ -133,12 +170,51 @@ impl TranscriptionDialog {
             text_view,
             scrolled,
             text_preview,
+            destination_labels,
+            destination_box,
             on_manual_stop: None,
             on_send_text: None,
             on_cancel: None,
         };
 
         dialog
+    }
+
+    pub fn set_destinations(&self, destinations: &[DestinationSlot]) {
+        if destinations.is_empty() {
+            self.destination_box.set_visible(false);
+            return;
+        }
+
+        self.destination_box.set_visible(true);
+
+        for (i, slot) in destinations.iter().enumerate().take(4) {
+            if let Some(label) = self.destination_labels.get(i) {
+                // Set the label text
+                label.set_markup(&format!("<small>{}</small>", slot.label));
+
+                // Create CSS provider for background color
+                let css_provider = gtk4::CssProvider::new();
+                let css = format!(
+                    "label {{ background-color: {}; padding: 4px 8px; }}",
+                    slot.color_hex
+                );
+                css_provider.load_from_data(&css);
+
+                // Apply CSS to the label
+                label.style_context().add_provider(
+                    &css_provider,
+                    gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                );
+            }
+        }
+
+        // Hide unused slots
+        for i in destinations.len()..4 {
+            if let Some(label) = self.destination_labels.get(i) {
+                label.set_visible(false);
+            }
+        }
     }
 
     pub fn connect_close_handler<F>(&self, on_close: F)
@@ -162,7 +238,7 @@ impl TranscriptionDialog {
 
     pub fn set_on_send_text<F>(&mut self, callback: F)
     where
-        F: Fn(String) + Send + Sync + 'static,
+        F: Fn(String, usize) + Send + Sync + 'static,
     {
         self.on_send_text = Some(Arc::new(callback));
     }
@@ -211,7 +287,7 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter key handling - send text when reviewing
+            // Ctrl+Enter key handling - send text when reviewing (default destination 0)
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
                 && current_state == TranscriptionState::Reviewing
@@ -223,9 +299,35 @@ impl TranscriptionDialog {
                         &buffer.end_iter(),
                         false,
                     );
-                    callback(text.to_string());
+                    callback(text.to_string(), 0);
                 }
                 return glib::Propagation::Stop;
+            }
+
+            // Ctrl+1 through Ctrl+4 key handling - send to specific destination
+            if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && current_state == TranscriptionState::Reviewing
+            {
+                let dest_num = match keyval {
+                    gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
+                    gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
+                    gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
+                    gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
+                    _ => None,
+                };
+
+                if let Some(dest) = dest_num {
+                    if let Some(ref callback) = on_send_text {
+                        let buffer = text_view.buffer();
+                        let text = buffer.text(
+                            &buffer.start_iter(),
+                            &buffer.end_iter(),
+                            false,
+                        );
+                        callback(text.to_string(), dest);
+                    }
+                    return glib::Propagation::Stop;
+                }
             }
 
             glib::Propagation::Proceed
@@ -263,7 +365,7 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter in text view
+            // Ctrl+Enter in text view (default destination 0)
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
                 && current_state == TranscriptionState::Reviewing
@@ -275,9 +377,35 @@ impl TranscriptionDialog {
                         &buffer.end_iter(),
                         false,
                     );
-                    callback(text.to_string());
+                    callback(text.to_string(), 0);
                 }
                 return glib::Propagation::Stop;
+            }
+
+            // Ctrl+1 through Ctrl+4 in text view
+            if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && current_state == TranscriptionState::Reviewing
+            {
+                let dest_num = match keyval {
+                    gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
+                    gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
+                    gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
+                    gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
+                    _ => None,
+                };
+
+                if let Some(dest) = dest_num {
+                    if let Some(ref callback) = on_send_text {
+                        let buffer = text_view_clone.buffer();
+                        let text = buffer.text(
+                            &buffer.start_iter(),
+                            &buffer.end_iter(),
+                            false,
+                        );
+                        callback(text.to_string(), dest);
+                    }
+                    return glib::Propagation::Stop;
+                }
             }
 
             glib::Propagation::Proceed

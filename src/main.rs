@@ -737,17 +737,24 @@ fn execute_output_command_with_window(command_template: &str, text: &str, window
     // If window_id is provided, also set KITTY_WINDOW_ID for kitty @ commands
     if let Some(id) = window_id {
         cmd.env("KITTY_WINDOW_ID", id.to_string());
-        tracing::info!("Set KITTY_WINDOW_ID={}", id);
+        tracing::info!(kitty_window_id = id, "Set KITTY_WINDOW_ID");
     }
 
     match cmd.output() {
         Ok(output) => {
+            tracing::debug!("Command stdout: {}", String::from_utf8_lossy(&output.stdout));
             if !output.status.success() {
-                tracing::error!("Command failed: {}", String::from_utf8_lossy(&output.stderr));
+                tracing::error!(
+                    status = ?output.status,
+                    stderr = %String::from_utf8_lossy(&output.stderr),
+                    "Command failed"
+                );
+            } else {
+                tracing::info!("Command executed successfully");
             }
         }
         Err(e) => {
-            tracing::error!("Failed to execute command: {}", e);
+            tracing::error!(error = %e, "Failed to execute command");
         }
     }
 }
