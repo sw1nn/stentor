@@ -74,6 +74,7 @@ enum UIMessage {
     SetTextPreview(String),
     AutoSendText(String, usize), // Auto-send text to specified slot (text, slot_num)
     SetDestinations(Vec<DestinationSlot>), // Update destination slots
+    StoreKittyWindowIds(Vec<u64>), // Store Kitty window IDs that had their background changed
     Close,
 }
 
@@ -239,6 +240,8 @@ async fn main() -> Result<()> {
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
                         let config_for_auto_send = config_clone.clone();
+                        let kitty_window_ids: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
+                        let kitty_window_ids_clone = Rc::clone(&kitty_window_ids);
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
                                 tracing::debug!("UI message received: {:?}", msg);
@@ -258,6 +261,10 @@ async fn main() -> Result<()> {
                                     UIMessage::SetDestinations(destinations) => {
                                         tracing::info!("Updating destinations with {} slots", destinations.len());
                                         dialog_for_updates.set_destinations(&destinations);
+                                    }
+                                    UIMessage::StoreKittyWindowIds(window_ids) => {
+                                        tracing::info!("Storing {} Kitty window IDs for cleanup", window_ids.len());
+                                        *kitty_window_ids.borrow_mut() = window_ids;
                                     }
                                     UIMessage::AutoSendText(text, dest_num) => {
                                         tracing::info!("Auto-sending text to destination {}: {}", dest_num, text);
@@ -298,6 +305,20 @@ async fn main() -> Result<()> {
                                             let _ = tx.send(RecordingCommand::Stop);
                                         }
                                         drop(stop_tx_lock);
+
+                                        // Reset Kitty window background colors if any were set
+                                        let window_ids = kitty_window_ids_clone.borrow().clone();
+                                        if !window_ids.is_empty() {
+                                            tracing::info!("Resetting background color for {} Kitty windows", window_ids.len());
+                                            for window_id in window_ids {
+                                                // Reset to hardcoded base color (TODO: make this configurable)
+                                                if let Err(e) = set_background_color("#1e1e2e", window_id) {
+                                                    tracing::warn!("Failed to reset background color for window {}: {}", window_id, e);
+                                                } else {
+                                                    tracing::debug!("Reset background color for window {}", window_id);
+                                                }
+                                            }
+                                        }
 
                                         dialog_for_updates.close();
                                         // Clean up state
@@ -403,6 +424,7 @@ async fn main() -> Result<()> {
                                         // Always build and send destination slots (even if empty) to update from initial state
                                         let palette = Palette::new("#1e1e2e");
                                         let mut destinations = Vec::new();
+                                        let mut modified_window_ids = Vec::new();
 
                                         // Set colors and env vars, build destination slots for found windows
                                         for (i, window) in claude_windows.iter().enumerate().take(4) {
@@ -413,6 +435,7 @@ async fn main() -> Result<()> {
                                                     tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
                                                 } else {
                                                     tracing::debug!("Set background color {} for window {}", color_hex, window.id);
+                                                    modified_window_ids.push(window.id);
                                                 }
 
                                                 // Set environment variable
@@ -427,6 +450,11 @@ async fn main() -> Result<()> {
                                                 let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
                                                 destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
                                             }
+                                        }
+
+                                        // Store window IDs for cleanup
+                                        if !modified_window_ids.is_empty() {
+                                            let _ = ui_tx_for_kitty.send_blocking(UIMessage::StoreKittyWindowIds(modified_window_ids));
                                         }
 
                                         // Fill remaining slots as inactive (greyed out)
