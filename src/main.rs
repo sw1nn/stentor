@@ -7,7 +7,7 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -192,8 +192,8 @@ async fn main() -> Result<()> {
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
         Arc::new(Mutex::new(None));
-    // Store the command slot to send to when Stop is called (Arc<Mutex<>> since it's shared with background threads)
-    let auto_send_slot: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+    // Store the command slot to send to when Stop is called (Arc<AtomicUsize> for lock-free access, usize::MAX = None)
+    let auto_send_slot: Arc<AtomicUsize> = Arc::new(AtomicUsize::new(usize::MAX));
     // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
     let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -413,7 +413,7 @@ async fn main() -> Result<()> {
                             tracing::info!("Stop and send to slot {} requested", dest_num);
 
                             // Store the destination slot for auto-send
-                            *auto_send_clone2.lock().unwrap() = Some(dest_num);
+                            auto_send_clone2.store(dest_num, Ordering::Release);
 
                             // Trigger stop to finalize transcription
                             let stop_tx_lock = stop_tx_clone2.lock().unwrap();
@@ -535,7 +535,7 @@ async fn main() -> Result<()> {
                             }
                             // Clear stop_tx and auto_send_slot when done
                             *stop_tx_storage.lock().unwrap() = None;
-                            *auto_send_for_recording.lock().unwrap() = None;
+                            auto_send_for_recording.store(usize::MAX, Ordering::Release);
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
                             tracing::info!("Recording thread finished, cleared recording_active flag");
@@ -551,7 +551,7 @@ async fn main() -> Result<()> {
                 }
                 DaemonCommand::Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription
-                    *auto_send_slot_clone.lock().unwrap() = Some(command_slot);
+                    auto_send_slot_clone.store(command_slot, Ordering::Release);
 
                     // Trigger manual stop
                     let stop_tx_lock = current_stop_tx_clone.lock().unwrap();
@@ -584,7 +584,7 @@ fn start_recording_session(
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     unmute_source: bool,
     source: Option<String>,
-    auto_send_slot: Arc<Mutex<Option<usize>>>,
+    auto_send_slot: Arc<AtomicUsize>,
 ) -> Result<()> {
     tracing::info!("Starting recording session");
 
@@ -870,8 +870,9 @@ fn start_recording_session(
     // Get final transcription result
     let final_text = accumulated_text.lock().unwrap().clone();
 
-    // Check if we should auto-send to a specific slot
-    let auto_slot = auto_send_slot.lock().unwrap().take();
+    // Check if we should auto-send to a specific slot (atomically retrieve and clear)
+    let slot_value = auto_send_slot.swap(usize::MAX, Ordering::AcqRel);
+    let auto_slot = if slot_value == usize::MAX { None } else { Some(slot_value) };
 
     if final_text.is_empty() {
         // No text yet, do one final transcription
