@@ -55,11 +55,13 @@ In your `config.toml`:
 output-command = "wl-copy"
 
 # Or send to a tmux session
-output-command = "tmux send-keys -t claude -l '{transcription}' && tmux send-keys -t claude Enter"
+output-command = "tmux send-keys -t claude -l \"$TRANSCRIPTION\" && tmux send-keys -t claude Enter"
 
 # Or paste directly with xdotool
-output-command = "xdotool type --clearmodifiers '{transcription}'"
+output-command = "xdotool type --clearmodifiers \"$TRANSCRIPTION\""
 ```
+
+The transcribed text is available via the `$TRANSCRIPTION` environment variable.
 
 ## License
 

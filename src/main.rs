@@ -16,13 +16,17 @@ mod config;
 mod daemon;
 mod dialog;
 mod keyboard;
+mod kitty;
+mod palette;
 mod source_mute;
 mod transcription;
 
 use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use config::Config;
 use daemon::{DaemonCommand, DaemonServer};
-use dialog::{TranscriptionDialog, TranscriptionState};
+use dialog::{DestinationSlot, TranscriptionDialog, TranscriptionState};
+use kitty::{find_claude_windows, list_kitty_windows, set_background_color};
+use palette::Palette;
 use source_mute::SourceMuteManager;
 use transcription::Transcriber;
 
@@ -43,13 +47,17 @@ struct Cli {
     #[arg(long)]
     socket: Option<PathBuf>,
 
-    /// Command to execute with transcribed text. Use {transcription} as placeholder.
+    /// Command to execute with transcribed text. Use $TRANSCRIPTION environment variable.
     #[arg(long)]
     output_command: Option<String>,
 
     /// Seconds of silence before stopping recording (default: from config or 1.5)
     #[arg(long)]
     silence_duration: Option<f32>,
+
+    /// Enable Kitty terminal integration for multi-destination support
+    #[arg(long)]
+    kitty: bool,
 
     /// Disable logging output (overrides RUST_LOG)
     #[arg(short, long)]
@@ -102,6 +110,9 @@ async fn main() -> Result<()> {
     }
     if let Some(silence_duration) = cli.silence_duration {
         config.silence_duration = silence_duration;
+    }
+    if cli.kitty {
+        config.kitty_mode = true;
     }
     log::info!("Loaded configuration: {:?}", config);
     log::info!("Using silence_duration: {} seconds", config.silence_duration);
@@ -198,6 +209,52 @@ async fn main() -> Result<()> {
                         };
                         dialog.set_source_info(&source_name);
 
+                        // Setup Kitty integration if enabled
+                        let kitty_windows = if config_clone.kitty_mode {
+                            log::info!("Kitty mode enabled, discovering Claude windows...");
+                            match list_kitty_windows().and_then(|data| Ok(find_claude_windows(&data))) {
+                                Ok(windows) => {
+                                    log::info!("Found {} Claude windows", windows.len());
+
+                                    // Create palette (using default dark theme color)
+                                    let palette = Palette::new("#1e1e2e");
+
+                                    // Setup destinations and colors
+                                    let mut destinations = Vec::new();
+                                    for (i, window) in windows.iter().enumerate().take(4) {
+                                        let slot_num = i + 1;
+                                        if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                                            // Extract just the directory name from the full CWD path
+                                            let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
+                                            destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+
+                                            // Set the window background color to match
+                                            if let Err(e) = set_background_color(color_hex, window.id) {
+                                                log::warn!("Failed to set background color for window {}: {}", window.id, e);
+                                            }
+                                        }
+                                    }
+
+                                    // Fill remaining slots as empty
+                                    for i in windows.len()..4 {
+                                        let slot_num = i + 1;
+                                        if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                                            destinations.push(DestinationSlot::empty(slot_num, color_hex.to_string()));
+                                        }
+                                    }
+
+                                    dialog.set_destinations(&destinations);
+                                    Some(windows)
+                                }
+                                Err(e) => {
+                                    log::warn!("Failed to discover Kitty windows: {}", e);
+                                    None
+                                }
+                            }
+                        } else {
+                            None
+                        };
+
                         // Create UI update channel with backpressure
                         // Bounded to prevent OOM if UI thread blocks
                         // Capacity of 128 (power of 2) allows ~8 seconds of buffering at typical message rate
@@ -250,11 +307,43 @@ async fn main() -> Result<()> {
 
                         let config_clone2 = config_clone.clone();
                         let ui_tx_for_close = ui_tx.clone();
-                        dialog.set_on_send_text(move |text| {
-                            log::info!("Sending text: {}", text);
-                            if let Some(ref cmd) = config_clone2.output_command {
-                                execute_output_command(cmd, &text);
+                        let kitty_windows_for_callback = kitty_windows.clone();
+                        dialog.set_on_send_text(move |text, dest_num| {
+                            log::info!("Sending text to destination {}: {}", dest_num, text);
+
+                            // If dest_num is 0 (Ctrl+Enter), use default output command
+                            // If dest_num is 1-4 (Ctrl+1-4), use corresponding output command
+                            let cmd = if dest_num == 0 {
+                                config_clone2.output_command.as_ref()
+                            } else {
+                                match dest_num {
+                                    1 => config_clone2.output_command_1.as_ref(),
+                                    2 => config_clone2.output_command_2.as_ref(),
+                                    3 => config_clone2.output_command_3.as_ref(),
+                                    4 => config_clone2.output_command_4.as_ref(),
+                                    _ => None,
+                                }
+                            };
+
+                            if let Some(cmd_str) = cmd {
+                                // If Kitty mode is enabled and we have windows, set KITTY_WINDOW_ID env var
+                                if config_clone2.kitty_mode {
+                                    if let Some(ref windows) = kitty_windows_for_callback {
+                                        if dest_num > 0 && dest_num <= windows.len() {
+                                            let window_id = windows[dest_num - 1].id;
+                                            log::info!("Setting KITTY_WINDOW_ID={} for destination {}", window_id, dest_num);
+                                            execute_output_command_with_window(cmd_str, &text, Some(window_id));
+                                        } else {
+                                            execute_output_command(cmd_str, &text);
+                                        }
+                                    } else {
+                                        execute_output_command(cmd_str, &text);
+                                    }
+                                } else {
+                                    execute_output_command(cmd_str, &text);
+                                }
                             }
+
                             // Close dialog
                             let _ = ui_tx_for_close.send_blocking(UIMessage::Close);
                         });
@@ -630,15 +719,25 @@ fn start_recording_session(
 }
 
 fn execute_output_command(command_template: &str, text: &str) {
+    execute_output_command_with_window(command_template, text, None);
+}
+
+fn execute_output_command_with_window(command_template: &str, text: &str, window_id: Option<u64>) {
     log::info!("Executing command: {}", command_template);
 
     // Pass transcription via environment variable to prevent shell injection
-    match std::process::Command::new("sh")
-        .arg("-c")
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c")
         .arg(command_template)
-        .env("TRANSCRIPTION", text)
-        .output()
-    {
+        .env("TRANSCRIPTION", text);
+
+    // If window_id is provided, also set KITTY_WINDOW_ID for kitty @ commands
+    if let Some(id) = window_id {
+        cmd.env("KITTY_WINDOW_ID", id.to_string());
+        log::info!("Set KITTY_WINDOW_ID={}", id);
+    }
+
+    match cmd.output() {
         Ok(output) => {
             if !output.status.success() {
                 log::error!("Command failed: {}", String::from_utf8_lossy(&output.stderr));

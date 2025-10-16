@@ -103,10 +103,10 @@ dialog.update_state(TranscriptionState::Reviewing, "Ready to send", 0.0);
 When user confirms (Ctrl+Enter):
 ```rust
 if let Some(ref cmd) = config.output_command {
-    let command = cmd.replace("{transcription}", &text);
     std::process::Command::new("sh")
         .arg("-c")
-        .arg(&command)
+        .arg(cmd)
+        .env("TRANSCRIPTION", text)
         .output()?;
 }
 dialog.close();

@@ -24,12 +24,12 @@ language = "en"
 #min-speech-duration = 0.5
 
 # Command to execute with transcribed text
-# Use {transcription} as placeholder for the transcribed text
+# The transcribed text is available via the $TRANSCRIPTION environment variable
 # Examples:
 #   - Copy to clipboard (X11): "xclip -selection clipboard"
 #   - Copy to clipboard (Wayland): "wl-copy"
-#   - Paste with xdotool: "xdotool type --clearmodifiers '{transcription}'"
-#   - Send to tmux session: "tmux send-keys -t claude -l '{transcription}' && tmux send-keys -t claude Enter"
+#   - Paste with xdotool: "xdotool type --clearmodifiers \"$TRANSCRIPTION\""
+#   - Send to tmux session: "tmux send-keys -t claude -l \"$TRANSCRIPTION\" && tmux send-keys -t claude Enter"
 #     (requires a tmux session named 'claude': tmux new-session -d -s claude)
 # output-command = "xclip -selection clipboard"
 
