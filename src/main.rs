@@ -7,6 +7,7 @@ use libadwaita as adw;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -180,12 +181,15 @@ async fn main() -> Result<()> {
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> = Arc::new(Mutex::new(None));
     // Store the command slot to send to when Stop is called (Arc<Mutex<>> since it's shared with background threads)
     let auto_send_slot: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
+    // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
+    let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // Clone for GTK main loop
     let current_dialog_clone = Rc::clone(&current_dialog);
     let current_ui_tx_clone = Rc::clone(&current_ui_tx);
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
     let auto_send_slot_clone = Arc::clone(&auto_send_slot);
+    let recording_active_clone = Arc::clone(&recording_active);
     let app_clone = app.clone();
     let config_clone = config.clone();
     let transcriber_clone = Arc::clone(&transcriber);
@@ -197,6 +201,17 @@ async fn main() -> Result<()> {
 
             match command {
                 DaemonCommand::Start { unmute_source, source, multi_slot_handler } => {
+                    // Check if a recording is already in progress
+                    if recording_active_clone.load(Ordering::Acquire) {
+                        tracing::warn!("Recording already in progress, ignoring Start command");
+                        // Bring existing dialog to front if it exists
+                        let dialog_ref = current_dialog_clone.borrow();
+                        if let Some(ref dialog) = *dialog_ref {
+                            dialog.present();
+                        }
+                        continue;
+                    }
+
                     let mut dialog_ref = current_dialog_clone.borrow_mut();
 
                     if dialog_ref.is_none() {
@@ -221,6 +236,8 @@ async fn main() -> Result<()> {
                         let dialog_for_updates = dialog.clone();
                         let dialog_state_clone = Rc::clone(&current_dialog_clone);
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
+                        let recording_active_for_ui = Arc::clone(&recording_active_clone);
+                        let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
                         let config_for_auto_send = config_clone.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
@@ -267,14 +284,27 @@ async fn main() -> Result<()> {
                                         dialog_for_updates.close();
                                         *dialog_state_clone.borrow_mut() = None;
                                         *ui_tx_state_clone.borrow_mut() = None;
+                                        // Clear recording active flag
+                                        recording_active_for_ui.store(false, Ordering::Release);
                                         break;
                                     }
                                     UIMessage::Close => {
                                         tracing::info!("Closing dialog and cleaning up state");
+
+                                        // Stop recording thread if it's still running
+                                        let stop_tx_lock = stop_tx_for_cleanup.lock().unwrap();
+                                        if let Some(ref tx) = *stop_tx_lock {
+                                            tracing::info!("Sending stop command to recording thread");
+                                            let _ = tx.send(RecordingCommand::Stop);
+                                        }
+                                        drop(stop_tx_lock);
+
                                         dialog_for_updates.close();
                                         // Clean up state
                                         *dialog_state_clone.borrow_mut() = None;
                                         *ui_tx_state_clone.borrow_mut() = None;
+                                        // Clear recording active flag
+                                        recording_active_for_ui.store(false, Ordering::Release);
                                         // Stop processing messages
                                         break;
                                     }
@@ -413,12 +443,16 @@ async fn main() -> Result<()> {
                             });
                         }
 
+                        // Mark recording as active
+                        recording_active_clone.store(true, Ordering::Release);
+
                         // Start recording in background
                         let config_clone = config_clone.clone();
                         let transcriber_clone = Arc::clone(&transcriber_clone);
                         let ui_tx_for_recording = ui_tx.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
                         let auto_send_for_recording = Arc::clone(&auto_send_slot_clone);
+                        let recording_active_for_thread = Arc::clone(&recording_active_clone);
 
                         thread::spawn(move || {
                             match start_recording_session(
@@ -440,6 +474,9 @@ async fn main() -> Result<()> {
                             // Clear stop_tx and auto_send_slot when done
                             *stop_tx_storage.lock().unwrap() = None;
                             *auto_send_for_recording.lock().unwrap() = None;
+                            // Clear recording active flag
+                            recording_active_for_thread.store(false, Ordering::Release);
+                            tracing::info!("Recording thread finished, cleared recording_active flag");
                         });
 
                         *dialog_ref = Some(dialog);
