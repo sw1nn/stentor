@@ -104,7 +104,7 @@ impl ClientConfig {
 
             Ok(config_file.client)
         } else {
-            log::info!("No config file found, using defaults");
+            tracing::info!("No config file found, using defaults");
             Ok(Self::default())
         }
     }
@@ -119,13 +119,13 @@ impl Config {
         let config = if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
             Self::load_from_file(&config_path)?
         } else {
-            log::info!("No config file found, using defaults");
+            tracing::info!("No config file found, using defaults");
             Self::default()
         };
 
         // Warn if socket name doesn't end in .sock
         if !config.socket_name.ends_with(".sock") {
-            log::warn!(
+            tracing::warn!(
                 "Socket name '{}' does not end with .sock - this may cause issues with some tools",
                 config.socket_name
             );
@@ -142,7 +142,7 @@ impl Config {
         let config_file: ConfigFile = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse config file: {}", path.display()))?;
 
-        log::info!("Loaded config from: {}", path.display());
+        tracing::info!("Loaded config from: {}", path.display());
         Ok(config_file.daemon)
     }
 
@@ -178,7 +178,7 @@ impl Config {
         std::fs::write(&path, contents)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
 
-        log::info!("Saved config to: {}", path.display());
+        tracing::info!("Saved config to: {}", path.display());
         Ok(())
     }
 }

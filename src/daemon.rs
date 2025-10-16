@@ -60,7 +60,7 @@ impl DaemonServer {
         let listener = UnixListener::bind(&self.socket_path)
             .with_context(|| format!("Failed to bind to socket: {}", self.socket_path.display()))?;
 
-        log::info!("Daemon listening on: {}", self.socket_path.display());
+        tracing::info!("Daemon listening on: {}", self.socket_path.display());
         self.listener = Some(listener);
 
         Ok(())
@@ -79,12 +79,12 @@ impl DaemonServer {
                     let command_tx = command_tx.clone();
                     tokio::spawn(async move {
                         if let Err(e) = handle_client(stream, command_tx).await {
-                            log::error!("Error handling client: {}", e);
+                            tracing::error!("Error handling client: {}", e);
                         }
                     });
                 }
                 Err(e) => {
-                    log::error!("Error accepting connection: {}", e);
+                    tracing::error!("Error accepting connection: {}", e);
                 }
             }
         }
@@ -101,17 +101,17 @@ impl Drop for DaemonServer {
                     use std::os::unix::fs::FileTypeExt;
                     if metadata.file_type().is_socket() {
                         if let Err(e) = std::fs::remove_file(&self.socket_path) {
-                            log::error!("Failed to remove socket file: {}", e);
+                            tracing::error!("Failed to remove socket file: {}", e);
                         }
                     } else {
-                        log::warn!("Path exists but is not a socket, not removing: {}", self.socket_path.display());
+                        tracing::warn!("Path exists but is not a socket, not removing: {}", self.socket_path.display());
                     }
                 }
 
                 #[cfg(not(unix))]
                 {
                     if let Err(e) = std::fs::remove_file(&self.socket_path) {
-                        log::error!("Failed to remove socket file: {}", e);
+                        tracing::error!("Failed to remove socket file: {}", e);
                     }
                 }
             }
@@ -133,11 +133,11 @@ async fn handle_client(
         // Try to parse as JSON
         match serde_json::from_str::<DaemonCommand>(command_str) {
             Ok(command) => {
-                log::info!("Received command: {:?}", command);
+                tracing::info!("Received command: {:?}", command);
 
                 // Send command to main loop
                 if command_tx.send(command.clone()).await.is_err() {
-                    log::error!("Failed to send command (receiver dropped)");
+                    tracing::error!("Failed to send command (receiver dropped)");
                     writer.write_all(b"ERROR: daemon shutting down\n").await?;
                     break;
                 }
@@ -156,7 +156,7 @@ async fn handle_client(
                 writer.write_all(response.as_bytes()).await?;
             }
             Err(e) => {
-                log::warn!("Failed to parse command '{}': {}", command_str, e);
+                tracing::warn!("Failed to parse command '{}': {}", command_str, e);
                 writer
                     .write_all(format!("ERROR: invalid command: {}\n", e).as_bytes())
                     .await?;

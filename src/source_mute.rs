@@ -17,10 +17,10 @@ impl SourceMuteManager {
         let (source_index, was_muted) = Self::get_default_source_info()?;
 
         if was_muted {
-            log::info!("Source was muted, unmuting for recording");
+            tracing::info!("Source was muted, unmuting for recording");
             Self::set_mute(source_index, false)?;
         } else {
-            log::debug!("Source was already unmuted");
+            tracing::debug!("Source was already unmuted");
         }
 
         Ok(Self {
@@ -50,7 +50,7 @@ impl SourceMuteManager {
 
             match context.get_state() {
                 libpulse_binding::context::State::Ready => {
-                    log::debug!("PulseAudio context ready");
+                    tracing::debug!("PulseAudio context ready");
                     break;
                 }
                 libpulse_binding::context::State::Failed | libpulse_binding::context::State::Terminated => {
@@ -67,10 +67,10 @@ impl SourceMuteManager {
         let introspect = context.introspect();
         introspect.get_server_info(move |server_info| {
             if let Some(name) = server_info.default_source_name.as_ref() {
-                log::debug!("Default source name from server: {}", name);
+                tracing::debug!("Default source name from server: {}", name);
                 *name_clone.borrow_mut() = Some(name.to_string());
             } else {
-                log::warn!("No default source name in server info");
+                tracing::warn!("No default source name in server info");
             }
         });
 
@@ -78,14 +78,14 @@ impl SourceMuteManager {
         for i in 0..50 {
             match mainloop.iterate(true) {  // true = blocking
                 IterateResult::Quit(_) | IterateResult::Err(_) => {
-                    log::debug!("Mainloop quit or error at iteration {}", i);
+                    tracing::debug!("Mainloop quit or error at iteration {}", i);
                     break;
                 }
                 IterateResult::Success(_) => {}
             }
 
             if default_source_name.borrow().is_some() {
-                log::debug!("Got default source name after {} iterations", i);
+                tracing::debug!("Got default source name after {} iterations", i);
                 break;
             }
         }
@@ -93,7 +93,7 @@ impl SourceMuteManager {
         let source_name = default_source_name.borrow().clone()
             .ok_or_else(|| anyhow::anyhow!("Failed to get default source name from PulseAudio"))?;
 
-        log::debug!("Looking for source: {}", source_name);
+        tracing::debug!("Looking for source: {}", source_name);
 
         // Now get the actual source info by name
         let result: Rc<RefCell<Option<(u32, bool)>>> = Rc::new(RefCell::new(None));
@@ -106,14 +106,14 @@ impl SourceMuteManager {
                     let index = source_info.index;
                     let is_muted = source_info.mute;
                     let name = source_info.name.as_ref().map(|s| s.to_string()).unwrap_or_else(|| "unknown".to_string());
-                    log::debug!("Found source '{}' with index: {}, muted: {}", name, index, is_muted);
+                    tracing::debug!("Found source '{}' with index: {}, muted: {}", name, index, is_muted);
                     *result_clone.borrow_mut() = Some((index, is_muted));
                 }
                 libpulse_binding::callbacks::ListResult::End => {
-                    log::debug!("Source info list end");
+                    tracing::debug!("Source info list end");
                 }
                 libpulse_binding::callbacks::ListResult::Error => {
-                    log::error!("Error getting source info");
+                    tracing::error!("Error getting source info");
                 }
             }
         });
@@ -122,14 +122,14 @@ impl SourceMuteManager {
         for i in 0..50 {
             match mainloop.iterate(true) {  // true = blocking
                 IterateResult::Quit(_) | IterateResult::Err(_) => {
-                    log::debug!("Mainloop quit or error at iteration {}", i);
+                    tracing::debug!("Mainloop quit or error at iteration {}", i);
                     break;
                 }
                 IterateResult::Success(_) => {}
             }
 
             if result.borrow().is_some() {
-                log::debug!("Got source info after {} iterations", i);
+                tracing::debug!("Got source info after {} iterations", i);
                 break;
             }
         }
@@ -173,7 +173,7 @@ impl SourceMuteManager {
         introspector.set_source_mute_by_index(source_index, mute, Some(Box::new(move |success| {
             *done_clone.borrow_mut() = true;
             if !success {
-                log::error!("Failed to set mute state");
+                tracing::error!("Failed to set mute state");
             }
         })));
 
@@ -189,7 +189,7 @@ impl SourceMuteManager {
             }
         }
 
-        log::debug!("Set source {} to {}", source_index, if mute { "muted" } else { "unmuted" });
+        tracing::debug!("Set source {} to {}", source_index, if mute { "muted" } else { "unmuted" });
         Ok(())
     }
 }
@@ -199,12 +199,12 @@ impl Drop for SourceMuteManager {
         // Restore original mute state
         if let Some(source_index) = self.source_index {
             if self.was_muted {
-                log::info!("Restoring source to muted state");
+                tracing::info!("Restoring source to muted state");
                 if let Err(e) = Self::set_mute(source_index, true) {
-                    log::error!("Failed to restore mute state: {}", e);
+                    tracing::error!("Failed to restore mute state: {}", e);
                 }
             } else {
-                log::debug!("Source was not muted originally, leaving unmuted");
+                tracing::debug!("Source was not muted originally, leaving unmuted");
             }
         }
     }

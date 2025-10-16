@@ -30,16 +30,16 @@ impl AudioRecorder {
     pub fn new(sample_rate: u32, source_name: Option<String>) -> Result<Self> {
         // Validate that the source exists if specified
         if let Some(ref name) = source_name {
-            log::info!("Looking for audio source: {}", name);
+            tracing::info!("Looking for audio source: {}", name);
 
             // Check if source exists
             if !Self::source_exists(name)? {
                 anyhow::bail!("Audio source '{}' not found", name);
             }
 
-            log::info!("Found audio source: {}", name);
+            tracing::info!("Found audio source: {}", name);
         } else {
-            log::info!("Using default audio source");
+            tracing::info!("Using default audio source");
         }
 
         Ok(Self {
@@ -172,7 +172,7 @@ impl AudioRecorder {
             Some(&buffer_attr),             // Buffer attributes
         ).context("Failed to create PulseAudio simple connection")?;
 
-        log::info!("PulseAudio simple connection created and ready");
+        tracing::info!("PulseAudio simple connection created and ready");
 
         // Spawn a thread to continuously read audio
         std::thread::spawn(move || {
@@ -183,7 +183,7 @@ impl AudioRecorder {
                 // Check for stop command
                 if let Ok(rx) = cmd_rx.lock() {
                     if let Ok(RecordingCommand::Stop) = rx.try_recv() {
-                        log::info!("Stop command received in audio thread");
+                        tracing::info!("Stop command received in audio thread");
                         break;
                     }
                 }
@@ -207,18 +207,18 @@ impl AudioRecorder {
                         let chunk = AudioChunk { data: samples, rms };
 
                         if chunk_tx.send(chunk).is_err() {
-                            log::info!("Receiver dropped, stopping audio thread");
+                            tracing::info!("Receiver dropped, stopping audio thread");
                             break;
                         }
                     }
                     Err(e) => {
-                        log::error!("Failed to read audio: {:?}", e);
+                        tracing::error!("Failed to read audio: {:?}", e);
                         break;
                     }
                 }
             }
 
-            log::info!("Audio recording thread exiting");
+            tracing::info!("Audio recording thread exiting");
         });
 
         Ok(())

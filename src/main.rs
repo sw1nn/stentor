@@ -87,9 +87,12 @@ async fn main() -> Result<()> {
     // If --quiet is set, disable logging completely
     // Otherwise, default to info level if RUST_LOG is not set
     if !cli.quiet {
-        env_logger::Builder::from_env(
-            env_logger::Env::default().default_filter_or("info")
-        ).init();
+        tracing_subscriber::fmt()
+            .with_env_filter(
+                tracing_subscriber::EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"))
+            )
+            .init();
     }
 
     // Initialize GTK and libadwaita
@@ -114,23 +117,23 @@ async fn main() -> Result<()> {
     if cli.kitty {
         config.kitty_mode = true;
     }
-    log::info!("Loaded configuration: {:?}", config);
-    log::info!("Using silence_duration: {} seconds", config.silence_duration);
+    tracing::info!("Loaded configuration: {:?}", config);
+    tracing::info!("Using silence_duration: {} seconds", config.silence_duration);
 
     // Log build-time compilation flags for debugging
-    log::info!("Build-time flags:");
-    log::info!("  Profile: {}", env!("BUILD_PROFILE"));
-    log::info!("  Opt Level: {}", env!("BUILD_OPT_LEVEL"));
-    log::info!("  Debug: {}", env!("BUILD_DEBUG"));
-    log::info!("  CFLAGS: {}", env!("BUILD_CFLAGS"));
-    log::info!("  CXXFLAGS: {}", env!("BUILD_CXXFLAGS"));
-    log::info!("  LDFLAGS: {}", env!("BUILD_LDFLAGS"));
-    log::info!("  RUSTFLAGS: {}", env!("BUILD_RUSTFLAGS"));
-    log::info!("  CARGO_PROFILE_RELEASE_LTO: {}", env!("BUILD_CARGO_PROFILE_RELEASE_LTO"));
-    log::info!("  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: {}", env!("BUILD_CARGO_PROFILE_RELEASE_CODEGEN_UNITS"));
+    tracing::info!("Build-time flags:");
+    tracing::info!("  Profile: {}", env!("BUILD_PROFILE"));
+    tracing::info!("  Opt Level: {}", env!("BUILD_OPT_LEVEL"));
+    tracing::info!("  Debug: {}", env!("BUILD_DEBUG"));
+    tracing::info!("  CFLAGS: {}", env!("BUILD_CFLAGS"));
+    tracing::info!("  CXXFLAGS: {}", env!("BUILD_CXXFLAGS"));
+    tracing::info!("  LDFLAGS: {}", env!("BUILD_LDFLAGS"));
+    tracing::info!("  RUSTFLAGS: {}", env!("BUILD_RUSTFLAGS"));
+    tracing::info!("  CARGO_PROFILE_RELEASE_LTO: {}", env!("BUILD_CARGO_PROFILE_RELEASE_LTO"));
+    tracing::info!("  CARGO_PROFILE_RELEASE_CODEGEN_UNITS: {}", env!("BUILD_CARGO_PROFILE_RELEASE_CODEGEN_UNITS"));
 
     // Load Whisper model (this will download if not present)
-    log::info!("Loading Whisper model: {}", config.model);
+    tracing::info!("Loading Whisper model: {}", config.model);
     let model = config.model.clone();
     let language = config.language.clone();
     let transcriber = tokio::task::spawn_blocking(move || Transcriber::new(model, language))
@@ -138,7 +141,7 @@ async fn main() -> Result<()> {
         .context("Failed to spawn model loading task")?
         .context("Failed to load Whisper model")?;
     let transcriber = Arc::new(transcriber);
-    log::info!("Whisper model loaded successfully");
+    tracing::info!("Whisper model loaded successfully");
 
     // Create daemon server
     let socket_path = if let Some(custom_socket) = cli.socket {
@@ -155,7 +158,7 @@ async fn main() -> Result<()> {
     // Spawn daemon server task
     tokio::spawn(async move {
         if let Err(e) = server.run(command_tx).await {
-            log::error!("Daemon server error: {}", e);
+            tracing::error!("Daemon server error: {}", e);
         }
     });
 
@@ -192,7 +195,7 @@ async fn main() -> Result<()> {
     // Setup GTK event loop integration with tokio
     glib::MainContext::default().spawn_local(async move {
         while let Some(command) = command_rx.recv().await {
-            log::info!("Processing command: {:?}", command);
+            tracing::info!("Processing command: {:?}", command);
 
             match command {
                 DaemonCommand::Start { unmute_source, source } => {
@@ -211,10 +214,10 @@ async fn main() -> Result<()> {
 
                         // Setup Kitty integration if enabled
                         let kitty_windows = if config_clone.kitty_mode {
-                            log::info!("Kitty mode enabled, discovering Claude windows...");
+                            tracing::info!("Kitty mode enabled, discovering Claude windows...");
                             match list_kitty_windows().and_then(|data| Ok(find_claude_windows(&data))) {
                                 Ok(windows) => {
-                                    log::info!("Found {} Claude windows", windows.len());
+                                    tracing::info!("Found {} Claude windows", windows.len());
 
                                     // Create palette (using default dark theme color)
                                     let palette = Palette::new("#1e1e2e");
@@ -230,7 +233,7 @@ async fn main() -> Result<()> {
 
                                             // Set the window background color to match
                                             if let Err(e) = set_background_color(color_hex, window.id) {
-                                                log::warn!("Failed to set background color for window {}: {}", window.id, e);
+                                                tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
                                             }
                                         }
                                     }
@@ -247,7 +250,7 @@ async fn main() -> Result<()> {
                                     Some(windows)
                                 }
                                 Err(e) => {
-                                    log::warn!("Failed to discover Kitty windows: {}", e);
+                                    tracing::warn!("Failed to discover Kitty windows: {}", e);
                                     None
                                 }
                             }
@@ -268,7 +271,7 @@ async fn main() -> Result<()> {
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
-                                log::debug!("UI message received: {:?}", msg);
+                                tracing::debug!("UI message received: {:?}", msg);
                                 match msg {
                                     UIMessage::UpdateState(state, text, level) => {
                                         dialog_for_updates.update_state(state, &text, level);
@@ -283,7 +286,7 @@ async fn main() -> Result<()> {
                                         dialog_for_updates.set_source_info(&name);
                                     }
                                     UIMessage::Close => {
-                                        log::info!("Closing dialog and cleaning up state");
+                                        tracing::info!("Closing dialog and cleaning up state");
                                         dialog_for_updates.close();
                                         // Clean up state
                                         *dialog_state_clone.borrow_mut() = None;
@@ -298,7 +301,7 @@ async fn main() -> Result<()> {
                         // Setup callbacks
                         let stop_tx_clone = Arc::clone(&current_stop_tx_clone);
                         dialog.set_on_manual_stop(move || {
-                            log::info!("Manual stop requested");
+                            tracing::info!("Manual stop requested");
                             let stop_tx_lock = stop_tx_clone.lock().unwrap();
                             if let Some(ref tx) = *stop_tx_lock {
                                 let _ = tx.send(RecordingCommand::Stop);
@@ -309,7 +312,7 @@ async fn main() -> Result<()> {
                         let ui_tx_for_close = ui_tx.clone();
                         let kitty_windows_for_callback = kitty_windows.clone();
                         dialog.set_on_send_text(move |text, dest_num| {
-                            log::info!("Sending text to destination {}: {}", dest_num, text);
+                            tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
                             // If dest_num is 0 (Ctrl+Enter), use default output command
                             // If dest_num is 1-4 (Ctrl+1-4), use corresponding output command
@@ -331,7 +334,7 @@ async fn main() -> Result<()> {
                                     if let Some(ref windows) = kitty_windows_for_callback {
                                         if dest_num > 0 && dest_num <= windows.len() {
                                             let window_id = windows[dest_num - 1].id;
-                                            log::info!("Setting KITTY_WINDOW_ID={} for destination {}", window_id, dest_num);
+                                            tracing::info!("Setting KITTY_WINDOW_ID={} for destination {}", window_id, dest_num);
                                             execute_output_command_with_window(cmd_str, &text, Some(window_id));
                                         } else {
                                             execute_output_command(cmd_str, &text);
@@ -350,7 +353,7 @@ async fn main() -> Result<()> {
 
                         let ui_tx_for_cancel = ui_tx.clone();
                         dialog.set_on_cancel(move || {
-                            log::info!("Cancelled");
+                            tracing::info!("Cancelled");
                             let _ = ui_tx_for_cancel.send_blocking(UIMessage::Close);
                         });
 
@@ -381,10 +384,10 @@ async fn main() -> Result<()> {
                                 source,
                             ) {
                                 Ok(_) => {
-                                    log::info!("Recording session completed");
+                                    tracing::info!("Recording session completed");
                                 }
                                 Err(e) => {
-                                    log::error!("Recording session error: {}", e);
+                                    tracing::error!("Recording session error: {}", e);
                                 }
                             }
                             // Clear stop_tx when done
@@ -407,10 +410,10 @@ async fn main() -> Result<()> {
                     }
                 }
                 DaemonCommand::Status => {
-                    log::info!("Status: running");
+                    tracing::info!("Status: running");
                 }
                 DaemonCommand::Quit => {
-                    log::info!("Quitting daemon");
+                    tracing::info!("Quitting daemon");
                     app_clone.quit();
                     break;
                 }
@@ -432,14 +435,14 @@ fn start_recording_session(
     unmute_source: bool,
     source: Option<String>,
 ) -> Result<()> {
-    log::info!("Starting recording session");
+    tracing::info!("Starting recording session");
 
     // Unmute source if requested
     let _source_manager = if unmute_source {
         match SourceMuteManager::unmute_if_needed() {
             Ok(manager) => Some(manager),
             Err(e) => {
-                log::warn!("Failed to manage source mute state: {}. Continuing anyway.", e);
+                tracing::warn!("Failed to manage source mute state: {}. Continuing anyway.", e);
                 None
             }
         }
@@ -468,7 +471,7 @@ fn start_recording_session(
     // IMPORTANT: Use the ACTUAL sample rate from the device, not the requested rate
     // silence_duration is not used for stopping, only for detecting silence state
     // stop_silence_duration (config.silence_duration) is used to actually stop the session
-    log::info!(
+    tracing::info!(
         "VAD initialized: silence_threshold={}, min_speech_duration={}, stop_silence_duration={}, sample_rate={}",
         config.silence_threshold,
         config.min_speech_duration,
@@ -504,17 +507,17 @@ fn start_recording_session(
         0.0,
     ));
 
-    log::info!("Waiting for speech to begin...");
+    tracing::info!("Waiting for speech to begin...");
 
     loop {
         match chunk_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(chunk) => {
                 let rms = chunk.rms;
-                log::debug!("Received audio chunk: RMS = {}", rms);
+                tracing::debug!("Received audio chunk: RMS = {}", rms);
 
                 // Process through VAD
                 let result = vad.process_chunk(rms, vad_state, silence_chunks, speech_chunks);
-                log::debug!("VAD: state transition {:?} -> {:?}, silence_chunks={}, should_stop={}",
+                tracing::debug!("VAD: state transition {:?} -> {:?}, silence_chunks={}, should_stop={}",
                     vad_state, result.state, silence_chunks, result.should_stop);
                 vad_state = result.state;
 
@@ -527,7 +530,7 @@ fn start_recording_session(
                         // Switch to transcription mode once speech starts
                         if !transcription_started {
                             transcription_started = true;
-                            log::info!("Speech detected! Starting continuous transcription...");
+                            tracing::info!("Speech detected! Starting continuous transcription...");
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
                                 "Transcribing... (press Escape or stop speaking to finish)".to_string(),
@@ -544,7 +547,7 @@ fn start_recording_session(
 
                         // Continuous transcription - re-transcribe ALL audio for accuracy
                         if last_transcription.elapsed() >= transcription_interval && !recorded_audio.is_empty() {
-                            log::info!("Re-transcribing all {} chunks for accuracy", recorded_audio.len());
+                            tracing::info!("Re-transcribing all {} chunks for accuracy", recorded_audio.len());
                             last_transcription = std::time::Instant::now();
 
                             // Clone all accumulated audio for transcription
@@ -575,12 +578,12 @@ fn start_recording_session(
                                         if !complete_text.is_empty() {
                                             // Replace accumulated text with the complete re-transcription
                                             *text_accumulator.lock().unwrap() = complete_text.clone();
-                                            log::info!("Complete transcription: '{}'", complete_text);
+                                            tracing::info!("Complete transcription: '{}'", complete_text);
                                             let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(complete_text));
                                         }
                                     }
                                     Err(e) => {
-                                        log::warn!("Continuous transcription failed: {}", e);
+                                        tracing::warn!("Continuous transcription failed: {}", e);
                                     }
                                 }
                             });
@@ -599,7 +602,7 @@ fn start_recording_session(
 
                         // Continue transcription during pauses - re-transcribe ALL audio for accuracy
                         if last_transcription.elapsed() >= transcription_interval && !recorded_audio.is_empty() {
-                            log::info!("Re-transcribing all {} chunks during pause", recorded_audio.len());
+                            tracing::info!("Re-transcribing all {} chunks during pause", recorded_audio.len());
                             last_transcription = std::time::Instant::now();
 
                             // Clone all accumulated audio for transcription
@@ -630,19 +633,19 @@ fn start_recording_session(
                                         if !complete_text.is_empty() {
                                             // Replace accumulated text with the complete re-transcription
                                             *text_accumulator.lock().unwrap() = complete_text.clone();
-                                            log::info!("Complete transcription during pause: '{}'", complete_text);
+                                            tracing::info!("Complete transcription during pause: '{}'", complete_text);
                                             let _ = ui_tx_transcribe.send_blocking(UIMessage::SetTextPreview(complete_text));
                                         }
                                     }
                                     Err(e) => {
-                                        log::warn!("Continuous transcription during pause failed: {}", e);
+                                        tracing::warn!("Continuous transcription during pause failed: {}", e);
                                     }
                                 }
                             });
                         }
 
                         if result.should_stop {
-                            log::info!("VAD detected end of speech (silence duration exceeded)");
+                            tracing::info!("VAD detected end of speech (silence duration exceeded)");
                             break;
                         }
                     }
@@ -660,7 +663,7 @@ fn start_recording_session(
                 continue;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                log::info!("Audio stream stopped (user pressed Escape)");
+                tracing::info!("Audio stream stopped (user pressed Escape)");
                 break;
             }
         }
@@ -674,7 +677,7 @@ fn start_recording_session(
     if final_text.is_empty() {
         // No text yet, do one final transcription
         if !recorded_audio.is_empty() {
-            log::info!("Performing final transcription of {} chunks", recorded_audio.len());
+            tracing::info!("Performing final transcription of {} chunks", recorded_audio.len());
             let audio_flat: Vec<f32> = recorded_audio.into_iter().flatten().collect();
 
             match transcriber.transcribe(&audio_flat) {
@@ -691,7 +694,7 @@ fn start_recording_session(
                     }
                 }
                 Err(e) => {
-                    log::error!("Final transcription failed: {}", e);
+                    tracing::error!("Final transcription failed: {}", e);
                 }
             }
         }
@@ -723,7 +726,7 @@ fn execute_output_command(command_template: &str, text: &str) {
 }
 
 fn execute_output_command_with_window(command_template: &str, text: &str, window_id: Option<u64>) {
-    log::info!("Executing command: {}", command_template);
+    tracing::info!(transcription = text, command_template, "Executing command");
 
     // Pass transcription via environment variable to prevent shell injection
     let mut cmd = std::process::Command::new("sh");
@@ -734,17 +737,17 @@ fn execute_output_command_with_window(command_template: &str, text: &str, window
     // If window_id is provided, also set KITTY_WINDOW_ID for kitty @ commands
     if let Some(id) = window_id {
         cmd.env("KITTY_WINDOW_ID", id.to_string());
-        log::info!("Set KITTY_WINDOW_ID={}", id);
+        tracing::info!("Set KITTY_WINDOW_ID={}", id);
     }
 
     match cmd.output() {
         Ok(output) => {
             if !output.status.success() {
-                log::error!("Command failed: {}", String::from_utf8_lossy(&output.stderr));
+                tracing::error!("Command failed: {}", String::from_utf8_lossy(&output.stderr));
             }
         }
         Err(e) => {
-            log::error!("Failed to execute command: {}", e);
+            tracing::error!("Failed to execute command: {}", e);
         }
     }
 }

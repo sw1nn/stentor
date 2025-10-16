@@ -20,7 +20,7 @@ impl Transcriber {
     pub fn new(model_size: String, language: String) -> Result<Self> {
         let model_path = Self::get_model_path(&model_size)?;
 
-        log::info!("Loading Whisper model from: {}", model_path.display());
+        tracing::info!("Loading Whisper model from: {}", model_path.display());
 
         // Suppress verbose whisper.cpp output by installing logging hooks
         // Without a logging backend feature enabled, this effectively disables whisper logging
@@ -73,7 +73,7 @@ impl Transcriber {
         }
 
         // Model doesn't exist, download it
-        log::info!("Model not found, downloading ggml-{}.bin...", model_size);
+        tracing::info!("Model not found, downloading ggml-{}.bin...", model_size);
         Self::download_model(model_size, &model_path)?;
 
         Ok(model_path)
@@ -92,8 +92,8 @@ impl Transcriber {
             model_size
         );
 
-        log::info!("Downloading from: {}", url);
-        log::info!("Saving to: {}", target_path.display());
+        tracing::info!("Downloading from: {}", url);
+        tracing::info!("Saving to: {}", target_path.display());
 
         // Download the model
         let response = reqwest::blocking::get(&url)

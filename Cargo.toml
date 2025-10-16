@@ -51,8 +51,8 @@ anyhow = "1"
 thiserror = "2"
 
 # Logging
-log = "0.4"
-env_logger = "0.11"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 # Signal handling

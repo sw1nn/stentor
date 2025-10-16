@@ -147,7 +147,7 @@ impl TranscriptionDialog {
     {
         let window = self.window.clone();
         window.connect_close_request(move |_| {
-            log::info!("Window close requested");
+            tracing::info!("Window close requested");
             on_close();
             glib::Propagation::Proceed
         });
@@ -295,7 +295,7 @@ impl TranscriptionDialog {
                 self.status_label.set_markup(&format!("<small>{}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
-                log::debug!("Level bar updated: {}", level);
+                tracing::debug!("Level bar updated: {}", level);
                 self.text_preview.set_visible(true);
                 self.scrolled.set_visible(false);
             }
