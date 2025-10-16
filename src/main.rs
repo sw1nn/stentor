@@ -214,8 +214,12 @@ async fn main() -> Result<()> {
 
             match command {
                 DaemonCommand::Start { unmute_source, source, multi_slot_handler } => {
-                    // Check if a recording is already in progress
-                    if recording_active_clone.load(Ordering::Acquire) {
+                    // Atomically check if recording is active and set it to true if not
+                    // This prevents race conditions where multiple Start commands arrive concurrently
+                    if recording_active_clone
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                    {
                         tracing::warn!("Recording already in progress, ignoring Start command");
                         // Bring existing dialog to front if it exists
                         let dialog_ref = current_dialog_clone.borrow();
@@ -502,8 +506,7 @@ async fn main() -> Result<()> {
                             });
                         }
 
-                        // Mark recording as active
-                        recording_active_clone.store(true, Ordering::Release);
+                        // Note: recording_active flag was already set by compare_exchange above
 
                         // Start recording in background
                         let config_clone = config_clone.clone();
