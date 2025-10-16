@@ -11,6 +11,169 @@ use std::rc::Rc;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
+/// Helper to wait for PulseAudio context to be ready
+pub fn wait_for_context_ready(mainloop: &mut Mainloop, context: &PulseContext) -> Result<()> {
+    const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
+
+    for _iteration in 0..MAX_ITERATIONS {
+        match context.get_state() {
+            libpulse_binding::context::State::Ready => {
+                return Ok(());
+            }
+            libpulse_binding::context::State::Failed
+            | libpulse_binding::context::State::Terminated => {
+                mainloop.unlock();
+                mainloop.stop();
+                anyhow::bail!("PulseAudio context failed");
+            }
+            _ => {
+                mainloop.unlock();
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                mainloop.lock();
+            }
+        }
+    }
+
+    mainloop.unlock();
+    mainloop.stop();
+    anyhow::bail!("Timeout waiting for PulseAudio context to become ready")
+}
+
+/// Helper struct to reuse PulseAudio mainloop and context for introspection operations
+pub struct PulseIntrospector {
+    mainloop: Mainloop,
+    context: PulseContext,
+}
+
+impl PulseIntrospector {
+    /// Create a new PulseIntrospector with its own mainloop and context
+    pub fn new() -> Result<Self> {
+        let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
+        let mut context = PulseContext::new(&mainloop, "stentor-introspector")
+            .context("Failed to create PulseAudio context")?;
+
+        context
+            .connect(None, ContextFlagSet::NOFLAGS, None)
+            .context("Failed to connect to PulseAudio")?;
+
+        mainloop.lock();
+        mainloop.start().context("Failed to start mainloop")?;
+
+        wait_for_context_ready(&mut mainloop, &context)?;
+
+        Ok(Self { mainloop, context })
+    }
+
+    /// Check if a source with the given name exists
+    pub fn source_exists(&mut self, name: &str) -> Result<bool> {
+        let found = Rc::new(RefCell::new(false));
+        let found_clone = Rc::clone(&found);
+        let target_name = name.to_string();
+
+        let introspect = self.context.introspect();
+        introspect.get_source_info_list(move |result| match result {
+            ListResult::Item(source_info) => {
+                if let Some(source_name) = source_info.name.as_ref() {
+                    if source_name.as_ref() == target_name.as_str() {
+                        *found_clone.borrow_mut() = true;
+                    }
+                }
+            }
+            ListResult::End | ListResult::Error => {}
+        });
+
+        self.mainloop.unlock();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        self.mainloop.lock();
+
+        Ok(*found.borrow())
+    }
+
+    /// Get the description for a named source
+    pub fn get_source_description(&mut self, source_name: &str) -> Result<String> {
+        let desc_result = Arc::new(Mutex::new(None));
+        let desc_result_clone = Arc::clone(&desc_result);
+
+        let introspector = self.context.introspect();
+        introspector.get_source_info_by_name(source_name, move |list_result| {
+            if let ListResult::Item(source_info) = list_result {
+                if let Some(desc) = source_info.description.as_ref() {
+                    *desc_result_clone.lock().unwrap() = Some(desc.to_string());
+                }
+            }
+        });
+
+        self.mainloop.unlock();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        self.mainloop.lock();
+
+        let desc = desc_result.lock().unwrap().clone();
+        desc.ok_or_else(|| {
+            anyhow::anyhow!("Could not get description for source '{}'", source_name)
+        })
+    }
+
+    /// Get the description for the default source
+    pub fn get_default_source_description(&mut self) -> Result<String> {
+        let default_source_name = self
+            .get_default_source_name()?
+            .ok_or_else(|| anyhow::anyhow!("Could not get default source name"))?;
+
+        self.get_source_description(&default_source_name)
+    }
+
+    /// Get the name of the default source
+    pub fn get_default_source_name(&mut self) -> Result<Option<String>> {
+        let result = Arc::new(Mutex::new(None));
+        let result_clone = Arc::clone(&result);
+
+        let introspector = self.context.introspect();
+        introspector.get_server_info(move |server_info| {
+            if let Some(default_source) = server_info.default_source_name.as_ref() {
+                *result_clone.lock().unwrap() = Some(default_source.to_string());
+            }
+        });
+
+        self.mainloop.unlock();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        self.mainloop.lock();
+
+        Ok(result.lock().unwrap().clone())
+    }
+
+    /// List all available source names
+    pub fn list_sources(&mut self) -> Result<Vec<String>> {
+        let sources = Rc::new(RefCell::new(Vec::new()));
+        let sources_clone = Rc::clone(&sources);
+
+        let introspect = self.context.introspect();
+        introspect.get_source_info_list(move |result| {
+            use ListResult::*;
+            match result {
+                Item(source_info) => {
+                    if let Some(name) = source_info.name.as_ref() {
+                        sources_clone.borrow_mut().push(name.to_string());
+                    }
+                }
+                End | Error => {}
+            }
+        });
+
+        self.mainloop.unlock();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        self.mainloop.lock();
+
+        Ok(sources.borrow().clone())
+    }
+}
+
+impl Drop for PulseIntrospector {
+    fn drop(&mut self) {
+        self.mainloop.unlock();
+        self.mainloop.stop();
+    }
+}
+
 pub struct AudioRecorder {
     source_name: Option<String>,
     sample_rate: u32,
@@ -32,8 +195,9 @@ impl AudioRecorder {
         if let Some(ref name) = source_name {
             tracing::info!("Looking for audio source: {}", name);
 
-            // Check if source exists
-            if !Self::source_exists(name)? {
+            // Check if source exists using PulseIntrospector
+            let mut introspector = PulseIntrospector::new()?;
+            if !introspector.source_exists(name)? {
                 anyhow::bail!("Audio source '{}' not found", name);
             }
 
@@ -48,86 +212,16 @@ impl AudioRecorder {
         })
     }
 
-    /// Check if a source with the given name exists
-    fn source_exists(name: &str) -> Result<bool> {
-        let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-        let mut context = PulseContext::new(&mainloop, "stentor-source-check")
-            .context("Failed to create PulseAudio context")?;
-
-        context
-            .connect(None, ContextFlagSet::NOFLAGS, None)
-            .context("Failed to connect to PulseAudio")?;
-
-        mainloop.lock();
-        mainloop.start().context("Failed to start mainloop")?;
-
-        // Wait for context to be ready (with timeout)
-        const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
-        let mut ready = false;
-
-        for _iteration in 0..MAX_ITERATIONS {
-            match context.get_state() {
-                libpulse_binding::context::State::Ready => {
-                    ready = true;
-                    break;
-                }
-                libpulse_binding::context::State::Failed
-                | libpulse_binding::context::State::Terminated => {
-                    mainloop.unlock();
-                    mainloop.stop();
-                    anyhow::bail!("PulseAudio context failed");
-                }
-                _ => {
-                    mainloop.unlock();
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                    mainloop.lock();
-                }
-            }
-        }
-
-        if !ready {
-            mainloop.unlock();
-            mainloop.stop();
-            anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
-        }
-
-        let found = Rc::new(RefCell::new(false));
-        let found_clone = Rc::clone(&found);
-        let target_name = name.to_string();
-
-        let introspect = context.introspect();
-        introspect.get_source_info_list(move |result| match result {
-            ListResult::Item(source_info) => {
-                if let Some(source_name) = source_info.name.as_ref() {
-                    if source_name.as_ref() == target_name.as_str() {
-                        *found_clone.borrow_mut() = true;
-                    }
-                }
-            }
-            ListResult::End => {}
-            ListResult::Error => {}
-        });
-
-        mainloop.unlock();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        mainloop.lock();
-        let exists = *found.borrow();
-        mainloop.unlock();
-
-        mainloop.stop();
-
-        Ok(exists)
-    }
-
     pub fn get_device_name(&self) -> Result<String> {
+        let mut introspector = PulseIntrospector::new()?;
+
         if let Some(ref name) = self.source_name {
             // Get the description for the named source
-            return get_pulse_source_description(name);
+            introspector.get_source_description(name)
+        } else {
+            // Get the default source description
+            introspector.get_default_source_description()
         }
-
-        // Get the default source description
-        get_pulse_default_source_description()
     }
 
     pub fn get_actual_sample_rate(&self) -> Result<u32> {
@@ -343,167 +437,6 @@ fn calculate_rms(samples: &[f32]) -> f32 {
 
     let sum_squares: f32 = samples.iter().map(|&s| s * s).sum();
     (sum_squares / samples.len() as f32).sqrt()
-}
-
-fn get_pulse_source_description(source_name: &str) -> Result<String> {
-    let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-    let mut context = PulseContext::new(&mainloop, "stentor-query")
-        .context("Failed to create PulseAudio context")?;
-
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .context("Failed to connect to PulseAudio")?;
-
-    mainloop.lock();
-    mainloop.start().context("Failed to start mainloop")?;
-
-    // Wait for context to be ready (with timeout)
-    const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
-    let mut ready = false;
-
-    for _iteration in 0..MAX_ITERATIONS {
-        match context.get_state() {
-            libpulse_binding::context::State::Ready => {
-                ready = true;
-                break;
-            }
-            libpulse_binding::context::State::Failed
-            | libpulse_binding::context::State::Terminated => {
-                mainloop.unlock();
-                mainloop.stop();
-                anyhow::bail!("PulseAudio context failed");
-            }
-            _ => {
-                mainloop.unlock();
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                mainloop.lock();
-            }
-        }
-    }
-
-    if !ready {
-        mainloop.unlock();
-        mainloop.stop();
-        anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
-    }
-
-    let desc_result = Arc::new(Mutex::new(None));
-    let desc_result_clone = Arc::clone(&desc_result);
-
-    let introspector = context.introspect();
-    introspector.get_source_info_by_name(source_name, move |list_result| {
-        if let libpulse_binding::callbacks::ListResult::Item(source_info) = list_result {
-            if let Some(desc) = source_info.description.as_ref() {
-                *desc_result_clone.lock().unwrap() = Some(desc.to_string());
-            }
-        }
-    });
-
-    mainloop.unlock();
-
-    // Wait for callback
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    mainloop.stop();
-
-    let desc = desc_result.lock().unwrap().clone();
-    if let Some(desc) = desc {
-        Ok(desc)
-    } else {
-        anyhow::bail!("Could not get description for source '{}'", source_name)
-    }
-}
-
-fn get_pulse_default_source_description() -> Result<String> {
-    let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-    let mut context = PulseContext::new(&mainloop, "stentor-query")
-        .context("Failed to create PulseAudio context")?;
-
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .context("Failed to connect to PulseAudio")?;
-
-    mainloop.lock();
-    mainloop.start().context("Failed to start mainloop")?;
-
-    // Wait for context to be ready (with timeout)
-    const MAX_ITERATIONS: u32 = 100; // 1 second timeout (100 * 10ms)
-    let mut ready = false;
-
-    for _iteration in 0..MAX_ITERATIONS {
-        match context.get_state() {
-            libpulse_binding::context::State::Ready => {
-                ready = true;
-                break;
-            }
-            libpulse_binding::context::State::Failed
-            | libpulse_binding::context::State::Terminated => {
-                mainloop.unlock();
-                mainloop.stop();
-                anyhow::bail!("PulseAudio context failed");
-            }
-            _ => {
-                mainloop.unlock();
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                mainloop.lock();
-            }
-        }
-    }
-
-    if !ready {
-        mainloop.unlock();
-        mainloop.stop();
-        anyhow::bail!("Timeout waiting for PulseAudio context to become ready");
-    }
-
-    let result = Arc::new(Mutex::new(None));
-    let result_clone = Arc::clone(&result);
-
-    // Get server info to find default source
-    let introspector = context.introspect();
-    introspector.get_server_info(move |server_info| {
-        if let Some(default_source) = server_info.default_source_name.as_ref() {
-            *result_clone.lock().unwrap() = Some(default_source.to_string());
-        }
-    });
-
-    mainloop.unlock();
-
-    // Wait for callback
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    mainloop.lock();
-    let default_source_name = result.lock().unwrap().clone();
-    mainloop.unlock();
-
-    if let Some(source_name) = default_source_name {
-        let desc_result = Arc::new(Mutex::new(None));
-        let desc_result_clone = Arc::clone(&desc_result);
-
-        mainloop.lock();
-        let introspector = context.introspect();
-        introspector.get_source_info_by_name(&source_name, move |list_result| {
-            if let libpulse_binding::callbacks::ListResult::Item(source_info) = list_result {
-                if let Some(desc) = source_info.description.as_ref() {
-                    *desc_result_clone.lock().unwrap() = Some(desc.to_string());
-                }
-            }
-        });
-        mainloop.unlock();
-
-        // Wait for callback
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        mainloop.stop();
-
-        let desc = desc_result.lock().unwrap().clone();
-        if let Some(desc) = desc {
-            return Ok(desc);
-        }
-    }
-
-    mainloop.stop();
-    anyhow::bail!("Could not get default source description")
 }
 
 #[cfg(test)]

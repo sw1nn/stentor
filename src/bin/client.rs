@@ -1,11 +1,6 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use libpulse_binding::callbacks::ListResult;
-use libpulse_binding::context::{Context as PulseContext, FlagSet as ContextFlagSet};
-use libpulse_binding::mainloop::threaded::Mainloop;
-use std::cell::RefCell;
 use std::path::PathBuf;
-use std::rc::Rc;
 use stentor::config::{ClientConfig, Config};
 use stentor::daemon::{DaemonCommand, MultiSlotHandler};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -187,74 +182,17 @@ async fn main() -> Result<()> {
 }
 
 fn list_sources() -> Result<()> {
-    let mut mainloop = Mainloop::new().context("Failed to create PulseAudio mainloop")?;
-    let mut context = PulseContext::new(&mainloop, "stentor-list-sources")
-        .context("Failed to create PulseAudio context")?;
+    use stentor::audio::PulseIntrospector;
 
-    context
-        .connect(None, ContextFlagSet::NOFLAGS, None)
-        .context("Failed to connect to PulseAudio")?;
+    let mut introspector =
+        PulseIntrospector::new().context("Failed to create PulseAudio introspector")?;
 
-    mainloop.lock();
-    mainloop.start().context("Failed to start mainloop")?;
-
-    // Wait for context to be ready
-    loop {
-        match context.get_state() {
-            libpulse_binding::context::State::Ready => break,
-            libpulse_binding::context::State::Failed
-            | libpulse_binding::context::State::Terminated => {
-                mainloop.unlock();
-                mainloop.stop();
-                anyhow::bail!("PulseAudio context failed");
-            }
-            _ => {
-                mainloop.unlock();
-                std::thread::sleep(std::time::Duration::from_millis(10));
-                mainloop.lock();
-            }
-        }
-    }
-
-    // Collect source names and find default
-    let sources = Rc::new(RefCell::new(Vec::new()));
-    let sources_clone = Rc::clone(&sources);
-
-    let introspect = context.introspect();
-    introspect.get_source_info_list(move |result| match result {
-        ListResult::Item(source_info) => {
-            if let Some(name) = source_info.name.as_ref() {
-                sources_clone.borrow_mut().push(name.to_string());
-            }
-        }
-        ListResult::End => {}
-        ListResult::Error => {}
-    });
-
-    mainloop.unlock();
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    // Get default source
-    let default_source = Rc::new(RefCell::new(None));
-    let default_source_clone = Rc::clone(&default_source);
-
-    mainloop.lock();
-    let introspect = context.introspect();
-    introspect.get_server_info(move |server_info| {
-        if let Some(default) = server_info.default_source_name.as_ref() {
-            *default_source_clone.borrow_mut() = Some(default.to_string());
-        }
-    });
-    mainloop.unlock();
-
-    std::thread::sleep(std::time::Duration::from_millis(100));
-
-    mainloop.lock();
-    let source_names = sources.borrow().clone();
-    let default_name = default_source.borrow().clone();
-    mainloop.unlock();
-
-    mainloop.stop();
+    let source_names = introspector
+        .list_sources()
+        .context("Failed to list audio sources")?;
+    let default_name = introspector
+        .get_default_source_name()
+        .context("Failed to get default source")?;
 
     println!("Available audio input sources:");
     println!("==============================\n");
@@ -274,7 +212,7 @@ fn list_sources() -> Result<()> {
     }
 
     println!("\nUsage:");
-    println!("  stentorctl start --source=\"SOURCE_NAME\"");
+    println!("  stentorctl transcribe --source=\"SOURCE_NAME\"");
     println!("\nOr add to ~/.config/stentor/config.toml:");
     println!("  [client]");
     println!("  source = \"SOURCE_NAME\"");
