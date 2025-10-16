@@ -169,7 +169,14 @@ impl PulseIntrospector {
 
 impl Drop for PulseIntrospector {
     fn drop(&mut self) {
+        // Mainloop should be locked at this point from all our operations
+        // We need to unlock it before stopping
         self.mainloop.unlock();
+
+        // Disconnect and cleanup context before stopping mainloop
+        self.context.disconnect();
+
+        // Stop the mainloop
         self.mainloop.stop();
     }
 }
