@@ -2,6 +2,7 @@ use gtk4::prelude::*;
 use gtk4::{gdk, glib, Application, ApplicationWindow, Box, Label, LevelBar, Orientation, Spinner, TextView, ScrolledWindow};
 use std::sync::{Arc, Mutex};
 
+#[derive(Debug, Clone)]
 pub struct DestinationSlot {
     pub label: String,
     pub color_hex: String,
@@ -52,6 +53,7 @@ pub struct TranscriptionDialog {
     on_manual_stop: Option<Arc<dyn Fn() + Send + Sync>>,
     on_send_text: Option<Arc<dyn Fn(String, usize) + Send + Sync>>,
     on_cancel: Option<Arc<dyn Fn() + Send + Sync>>,
+    on_stop_and_send: Option<Arc<dyn Fn(usize) + Send + Sync>>, // Stop recording and send to slot
 }
 
 impl TranscriptionDialog {
@@ -175,6 +177,7 @@ impl TranscriptionDialog {
             on_manual_stop: None,
             on_send_text: None,
             on_cancel: None,
+            on_stop_and_send: None,
         };
 
         dialog
@@ -250,11 +253,20 @@ impl TranscriptionDialog {
         self.on_cancel = Some(Arc::new(callback));
     }
 
+    pub fn set_on_stop_and_send<F>(&mut self, callback: F)
+    where
+        F: Fn(usize) + Send + Sync + 'static,
+    {
+        self.on_stop_and_send = Some(Arc::new(callback));
+    }
+
     pub fn setup_key_handlers(&self) {
         let state = Arc::clone(&self.state);
         let on_manual_stop = self.on_manual_stop.clone();
         let on_manual_stop_clone = on_manual_stop.clone();
         let on_send_text = self.on_send_text.clone();
+        let on_stop_and_send = self.on_stop_and_send.clone();
+        let on_stop_and_send_clone = on_stop_and_send.clone();
         let on_cancel = self.on_cancel.clone();
         let text_view = self.text_view.clone();
         let window = self.window.clone();
@@ -287,27 +299,32 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter key handling - send text when reviewing (default destination 0)
+            // Ctrl+Enter key handling - stop and send immediately during recording, or send text during reviewing
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                && current_state == TranscriptionState::Reviewing
             {
-                if let Some(ref callback) = on_send_text {
-                    let buffer = text_view.buffer();
-                    let text = buffer.text(
-                        &buffer.start_iter(),
-                        &buffer.end_iter(),
-                        false,
-                    );
-                    callback(text.to_string(), 0);
+                match current_state {
+                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                        // Stop recording and send to default slot (0)
+                        if let Some(ref callback) = on_stop_and_send {
+                            callback(0);
+                        }
+                    }
+                    TranscriptionState::Reviewing => {
+                        // Send text from editable view
+                        if let Some(ref callback) = on_send_text {
+                            let buffer = text_view.buffer();
+                            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                            callback(text, 0);
+                        }
+                    }
+                    _ => {}
                 }
                 return glib::Propagation::Stop;
             }
 
-            // Ctrl+1 through Ctrl+4 key handling - send to specific destination
-            if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                && current_state == TranscriptionState::Reviewing
-            {
+            // Ctrl+1 through Ctrl+4 key handling - stop and send to specific destination
+            if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
@@ -317,14 +334,22 @@ impl TranscriptionDialog {
                 };
 
                 if let Some(dest) = dest_num {
-                    if let Some(ref callback) = on_send_text {
-                        let buffer = text_view.buffer();
-                        let text = buffer.text(
-                            &buffer.start_iter(),
-                            &buffer.end_iter(),
-                            false,
-                        );
-                        callback(text.to_string(), dest);
+                    match current_state {
+                        TranscriptionState::Recording | TranscriptionState::Processing => {
+                            // Stop recording and send to specific slot
+                            if let Some(ref callback) = on_stop_and_send {
+                                callback(dest);
+                            }
+                        }
+                        TranscriptionState::Reviewing => {
+                            // Send text from editable view to specific slot
+                            if let Some(ref callback) = on_send_text {
+                                let buffer = text_view.buffer();
+                                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                                callback(text, dest);
+                            }
+                        }
+                        _ => {}
                     }
                     return glib::Propagation::Stop;
                 }
@@ -365,27 +390,32 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter in text view (default destination 0)
+            // Ctrl+Enter in text view - stop and send during recording, or send during reviewing
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                && current_state == TranscriptionState::Reviewing
             {
-                if let Some(ref callback) = on_send_text {
-                    let buffer = text_view_clone.buffer();
-                    let text = buffer.text(
-                        &buffer.start_iter(),
-                        &buffer.end_iter(),
-                        false,
-                    );
-                    callback(text.to_string(), 0);
+                match current_state {
+                    TranscriptionState::Recording | TranscriptionState::Processing => {
+                        // Stop recording and send to default slot (0)
+                        if let Some(ref callback) = on_stop_and_send_clone {
+                            callback(0);
+                        }
+                    }
+                    TranscriptionState::Reviewing => {
+                        // Send text from editable view
+                        if let Some(ref callback) = on_send_text {
+                            let buffer = text_view_clone.buffer();
+                            let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                            callback(text, 0);
+                        }
+                    }
+                    _ => {}
                 }
                 return glib::Propagation::Stop;
             }
 
             // Ctrl+1 through Ctrl+4 in text view
-            if modifiers.contains(gdk::ModifierType::CONTROL_MASK)
-                && current_state == TranscriptionState::Reviewing
-            {
+            if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
@@ -395,14 +425,22 @@ impl TranscriptionDialog {
                 };
 
                 if let Some(dest) = dest_num {
-                    if let Some(ref callback) = on_send_text {
-                        let buffer = text_view_clone.buffer();
-                        let text = buffer.text(
-                            &buffer.start_iter(),
-                            &buffer.end_iter(),
-                            false,
-                        );
-                        callback(text.to_string(), dest);
+                    match current_state {
+                        TranscriptionState::Recording | TranscriptionState::Processing => {
+                            // Stop recording and send to specific slot
+                            if let Some(ref callback) = on_stop_and_send_clone {
+                                callback(dest);
+                            }
+                        }
+                        TranscriptionState::Reviewing => {
+                            // Send text from editable view to specific slot
+                            if let Some(ref callback) = on_send_text {
+                                let buffer = text_view_clone.buffer();
+                                let text = buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string();
+                                callback(text, dest);
+                            }
+                        }
+                        _ => {}
                     }
                     return glib::Propagation::Stop;
                 }
@@ -499,6 +537,23 @@ impl TranscriptionDialog {
 
     pub fn set_text_preview(&self, text: &str) {
         self.text_preview.set_text(text);
+    }
+
+    #[allow(dead_code)]
+    pub fn get_current_text(&self) -> String {
+        let current_state = *self.state.lock().unwrap();
+
+        match current_state {
+            TranscriptionState::Reviewing => {
+                // Get text from editable view
+                let buffer = self.text_view.buffer();
+                buffer.text(&buffer.start_iter(), &buffer.end_iter(), false).to_string()
+            }
+            _ => {
+                // Get text from preview label
+                self.text_preview.text().to_string()
+            }
+        }
     }
 
     pub fn set_transcribed_text(&self, text: &str) {

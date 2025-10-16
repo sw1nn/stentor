@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
 use stentor::config::{ClientConfig, Config};
-use stentor::daemon::DaemonCommand;
+use stentor::daemon::{DaemonCommand, MultiSlotHandler};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -33,13 +33,23 @@ Examples:
   # Start recording with specific source
   stentorctl start --source=\"USB Condenser Microphone\"
 
-  # Stop recording and transcribe
+  # Start recording with Kitty multi-slot handler
+  stentorctl start --multi-slot-handler=kitty
+
+  # Stop recording and transcribe (shows dialog)
   stentorctl stop
+
+  # Stop and auto-send to slot 1
+  stentorctl stop --slot=1
+
+  # Stop and auto-send to default output
+  stentorctl stop --slot=0
 
   # Shorthand (no subcommand = start)
   stentorctl
 
-Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.")]
+Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.
+Enable Kitty mode in [daemon] section with: kitty-mode = true")]
 struct Cli {
     /// Command to send (default: start)
     #[arg(value_parser = ["start", "stop", "quit", "list-sources"], default_value = "start")]
@@ -56,6 +66,14 @@ struct Cli {
     /// Unix socket path (default: from config or $XDG_RUNTIME_DIR/stentor.sock)
     #[arg(long)]
     socket: Option<PathBuf>,
+
+    /// Destination slot for stop command (0 = default, 1-4 = specific slots)
+    #[arg(long, default_value = "0")]
+    slot: usize,
+
+    /// Multi-slot handler to use (none, kitty)
+    #[arg(long, value_parser = ["none", "kitty"])]
+    multi_slot_handler: Option<String>,
 }
 
 #[tokio::main]
@@ -101,12 +119,29 @@ async fn main() -> Result<()> {
         "start" => {
             // Use CLI source if specified, otherwise fall back to config
             let source = cli.source.or(client_config.source);
+
+            // Determine multi-slot handler from CLI arg or config
+            let multi_slot_handler = if let Some(handler_str) = &cli.multi_slot_handler {
+                match handler_str.as_str() {
+                    "kitty" => MultiSlotHandler::Kitty,
+                    "none" => MultiSlotHandler::None,
+                    _ => MultiSlotHandler::None,
+                }
+            } else if config.kitty_mode {
+                MultiSlotHandler::Kitty
+            } else {
+                MultiSlotHandler::None
+            };
+
             DaemonCommand::Start {
                 unmute_source: cli.unmute_source,
                 source,
+                multi_slot_handler,
             }
         }
-        "stop" => DaemonCommand::Stop,
+        "stop" => DaemonCommand::Stop {
+            command_slot: cli.slot,
+        },
         "status" => DaemonCommand::Status,
         "quit" => DaemonCommand::Quit,
         _ => anyhow::bail!("Unknown command: {}", command_name),

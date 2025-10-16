@@ -6,6 +6,19 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::mpsc;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MultiSlotHandler {
+    None,
+    Kitty,
+}
+
+impl Default for MultiSlotHandler {
+    fn default() -> Self {
+        Self::None
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum DaemonCommand {
     Start {
@@ -13,8 +26,14 @@ pub enum DaemonCommand {
         unmute_source: bool,
         #[serde(default)]
         source: Option<String>,
+        #[serde(default)]
+        multi_slot_handler: MultiSlotHandler,
     },
-    Stop,
+    Stop {
+        /// Destination slot to send transcription to (0 = default, 1-4 = specific slots)
+        #[serde(default)]
+        command_slot: usize,
+    },
     Status,
     Quit,
 }
@@ -145,7 +164,7 @@ async fn handle_client(
                 // Send response
                 let response = match command {
                     DaemonCommand::Start { .. } => "OK: started\n",
-                    DaemonCommand::Stop => "OK: stopped\n",
+                    DaemonCommand::Stop { .. } => "OK: stopped\n",
                     DaemonCommand::Status => "OK: running\n",
                     DaemonCommand::Quit => {
                         writer.write_all(b"OK: quitting\n").await?;
@@ -179,6 +198,7 @@ mod tests {
         let cmd = DaemonCommand::Start {
             unmute_source: false,
             source: None,
+            multi_slot_handler: MultiSlotHandler::None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -188,6 +208,7 @@ mod tests {
         let cmd = DaemonCommand::Start {
             unmute_source: true,
             source: None,
+            multi_slot_handler: MultiSlotHandler::None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -197,23 +218,35 @@ mod tests {
         let cmd = DaemonCommand::Start {
             unmute_source: false,
             source: Some("USB Condenser Microphone".to_string()),
+            multi_slot_handler: MultiSlotHandler::None,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
 
-        // Test Start with both options
+        // Test Start with Kitty handler
         let cmd = DaemonCommand::Start {
             unmute_source: true,
             source: Some("HD-Audio Generic".to_string()),
+            multi_slot_handler: MultiSlotHandler::Kitty,
         };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
+
+        // Test Stop with different slots
+        let cmd = DaemonCommand::Stop { command_slot: 0 };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(cmd, parsed);
+
+        let cmd = DaemonCommand::Stop { command_slot: 2 };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
 
         // Test other commands
         let commands = vec![
-            DaemonCommand::Stop,
             DaemonCommand::Status,
             DaemonCommand::Quit,
         ];

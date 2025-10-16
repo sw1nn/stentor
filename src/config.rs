@@ -57,7 +57,7 @@ pub struct Config {
     #[serde(default, alias = "output-command-4")]
     pub output_command_4: Option<String>,
 
-    #[serde(default)]
+    #[serde(default, alias = "kitty-mode")]
     pub kitty_mode: bool,
 
     #[serde(default = "default_socket_name", alias = "socket-name")]

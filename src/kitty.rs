@@ -9,12 +9,12 @@ use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 #[derive(Serialize)]
-struct KittyCommand {
+struct KittyCommand<T = SetColorsPayload> {
     cmd: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     version: Option<Vec<u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    payload: Option<SetColorsPayload>,
+    payload: Option<T>,
 }
 
 #[derive(Serialize)]
@@ -25,6 +25,14 @@ struct SetColorsPayload {
     match_window: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reset: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct SetUserVarsPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    match_window: Option<String>,
+    #[serde(flatten)]
+    vars: HashMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -44,7 +52,7 @@ fn get_kitty_socket_name() -> Result<String> {
     Ok("kitty".to_string())
 }
 
-fn send_kitty_command(cmd: KittyCommand) -> Result<()> {
+fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
     let json = serde_json::to_string(&cmd)?;
     tracing::debug!("Sending command JSON: {}", json);
     let socket_name = get_kitty_socket_name()?;
@@ -275,6 +283,26 @@ pub fn set_background_color(color: &str, window_id: u64) -> Result<()> {
     let cmd = KittyCommand {
         cmd: "set-colors".to_string(),
         version: Some(vec![0, 26, 0]),
+        payload: Some(payload),
+    };
+
+    send_kitty_command(cmd)
+}
+
+pub fn set_window_env_var(var_name: &str, var_value: &str, window_id: u64) -> Result<()> {
+    let match_window = Some(format!("id:{}", window_id));
+
+    let mut vars = HashMap::new();
+    vars.insert(var_name.to_string(), var_value.to_string());
+
+    let payload = SetUserVarsPayload {
+        match_window,
+        vars,
+    };
+
+    let cmd = KittyCommand {
+        cmd: "set-user-vars".to_string(),
+        version: Some(vec![0, 35, 0]),
         payload: Some(payload),
     };
 

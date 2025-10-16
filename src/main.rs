@@ -23,9 +23,9 @@ mod transcription;
 
 use audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use config::Config;
-use daemon::{DaemonCommand, DaemonServer};
+use daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use dialog::{DestinationSlot, TranscriptionDialog, TranscriptionState};
-use kitty::{find_claude_windows, list_kitty_windows, set_background_color};
+use kitty::{find_claude_windows, list_kitty_windows, set_background_color, set_window_env_var};
 use palette::Palette;
 use source_mute::SourceMuteManager;
 use transcription::Transcriber;
@@ -55,10 +55,6 @@ struct Cli {
     #[arg(long)]
     silence_duration: Option<f32>,
 
-    /// Enable Kitty terminal integration for multi-destination support
-    #[arg(long)]
-    kitty: bool,
-
     /// Disable logging output (overrides RUST_LOG)
     #[arg(short, long)]
     quiet: bool,
@@ -75,6 +71,8 @@ enum UIMessage {
     SetMicrophone(String),
     SetText(String),
     SetTextPreview(String),
+    AutoSendText(String, usize), // Auto-send text to specified slot (text, slot_num)
+    SetDestinations(Vec<DestinationSlot>), // Update destination slots
     Close,
 }
 
@@ -113,9 +111,6 @@ async fn main() -> Result<()> {
     }
     if let Some(silence_duration) = cli.silence_duration {
         config.silence_duration = silence_duration;
-    }
-    if cli.kitty {
-        config.kitty_mode = true;
     }
     tracing::info!("Loaded configuration: {:?}", config);
     tracing::info!("Using silence_duration: {} seconds", config.silence_duration);
@@ -183,11 +178,14 @@ async fn main() -> Result<()> {
     let current_ui_tx: Rc<RefCell<Option<Sender<UIMessage>>>> = Rc::new(RefCell::new(None));
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> = Arc::new(Mutex::new(None));
+    // Store the command slot to send to when Stop is called (Arc<Mutex<>> since it's shared with background threads)
+    let auto_send_slot: Arc<Mutex<Option<usize>>> = Arc::new(Mutex::new(None));
 
     // Clone for GTK main loop
     let current_dialog_clone = Rc::clone(&current_dialog);
     let current_ui_tx_clone = Rc::clone(&current_ui_tx);
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
+    let auto_send_slot_clone = Arc::clone(&auto_send_slot);
     let app_clone = app.clone();
     let config_clone = config.clone();
     let transcriber_clone = Arc::clone(&transcriber);
@@ -198,7 +196,7 @@ async fn main() -> Result<()> {
             tracing::info!("Processing command: {:?}", command);
 
             match command {
-                DaemonCommand::Start { unmute_source, source } => {
+                DaemonCommand::Start { unmute_source, source, multi_slot_handler } => {
                     let mut dialog_ref = current_dialog_clone.borrow_mut();
 
                     if dialog_ref.is_none() {
@@ -212,52 +210,6 @@ async fn main() -> Result<()> {
                         };
                         dialog.set_source_info(&source_name);
 
-                        // Setup Kitty integration if enabled
-                        let kitty_windows = if config_clone.kitty_mode {
-                            tracing::info!("Kitty mode enabled, discovering Claude windows...");
-                            match list_kitty_windows().and_then(|data| Ok(find_claude_windows(&data))) {
-                                Ok(windows) => {
-                                    tracing::info!("Found {} Claude windows", windows.len());
-
-                                    // Create palette (using default dark theme color)
-                                    let palette = Palette::new("#1e1e2e");
-
-                                    // Setup destinations and colors
-                                    let mut destinations = Vec::new();
-                                    for (i, window) in windows.iter().enumerate().take(4) {
-                                        let slot_num = i + 1;
-                                        if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                                            // Extract just the directory name from the full CWD path
-                                            let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
-                                            destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
-
-                                            // Set the window background color to match
-                                            if let Err(e) = set_background_color(color_hex, window.id) {
-                                                tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
-                                            }
-                                        }
-                                    }
-
-                                    // Fill remaining slots as empty
-                                    for i in windows.len()..4 {
-                                        let slot_num = i + 1;
-                                        if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                                            destinations.push(DestinationSlot::empty(slot_num, color_hex.to_string()));
-                                        }
-                                    }
-
-                                    dialog.set_destinations(&destinations);
-                                    Some(windows)
-                                }
-                                Err(e) => {
-                                    tracing::warn!("Failed to discover Kitty windows: {}", e);
-                                    None
-                                }
-                            }
-                        } else {
-                            None
-                        };
-
                         // Create UI update channel with backpressure
                         // Bounded to prevent OOM if UI thread blocks
                         // Capacity of 128 (power of 2) allows ~8 seconds of buffering at typical message rate
@@ -269,6 +221,7 @@ async fn main() -> Result<()> {
                         let dialog_for_updates = dialog.clone();
                         let dialog_state_clone = Rc::clone(&current_dialog_clone);
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
+                        let config_for_auto_send = config_clone.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
                                 tracing::debug!("UI message received: {:?}", msg);
@@ -284,6 +237,37 @@ async fn main() -> Result<()> {
                                     }
                                     UIMessage::SetMicrophone(name) => {
                                         dialog_for_updates.set_source_info(&name);
+                                    }
+                                    UIMessage::SetDestinations(destinations) => {
+                                        tracing::info!("Updating destinations with {} slots", destinations.len());
+                                        dialog_for_updates.set_destinations(&destinations);
+                                    }
+                                    UIMessage::AutoSendText(text, dest_num) => {
+                                        tracing::info!("Auto-sending text to destination {}: {}", dest_num, text);
+
+                                        // Select command based on destination
+                                        let cmd = if dest_num == 0 {
+                                            config_for_auto_send.output_command.as_ref()
+                                        } else {
+                                            match dest_num {
+                                                1 => config_for_auto_send.output_command_1.as_ref(),
+                                                2 => config_for_auto_send.output_command_2.as_ref(),
+                                                3 => config_for_auto_send.output_command_3.as_ref(),
+                                                4 => config_for_auto_send.output_command_4.as_ref(),
+                                                _ => None,
+                                            }
+                                        };
+
+                                        if let Some(cmd_str) = cmd {
+                                            execute_output_command(cmd_str, &text);
+                                        }
+
+                                        // Close dialog after auto-send
+                                        tracing::info!("Closing dialog after auto-send");
+                                        dialog_for_updates.close();
+                                        *dialog_state_clone.borrow_mut() = None;
+                                        *ui_tx_state_clone.borrow_mut() = None;
+                                        break;
                                     }
                                     UIMessage::Close => {
                                         tracing::info!("Closing dialog and cleaning up state");
@@ -310,7 +294,6 @@ async fn main() -> Result<()> {
 
                         let config_clone2 = config_clone.clone();
                         let ui_tx_for_close = ui_tx.clone();
-                        let kitty_windows_for_callback = kitty_windows.clone();
                         dialog.set_on_send_text(move |text, dest_num| {
                             tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
@@ -329,22 +312,7 @@ async fn main() -> Result<()> {
                             };
 
                             if let Some(cmd_str) = cmd {
-                                // If Kitty mode is enabled and we have windows, set KITTY_WINDOW_ID env var
-                                if config_clone2.kitty_mode {
-                                    if let Some(ref windows) = kitty_windows_for_callback {
-                                        if dest_num > 0 && dest_num <= windows.len() {
-                                            let window_id = windows[dest_num - 1].id;
-                                            tracing::info!("Setting KITTY_WINDOW_ID={} for destination {}", window_id, dest_num);
-                                            execute_output_command_with_window(cmd_str, &text, Some(window_id));
-                                        } else {
-                                            execute_output_command(cmd_str, &text);
-                                        }
-                                    } else {
-                                        execute_output_command(cmd_str, &text);
-                                    }
-                                } else {
-                                    execute_output_command(cmd_str, &text);
-                                }
+                                execute_output_command(cmd_str, &text);
                             }
 
                             // Close dialog
@@ -355,6 +323,21 @@ async fn main() -> Result<()> {
                         dialog.set_on_cancel(move || {
                             tracing::info!("Cancelled");
                             let _ = ui_tx_for_cancel.send_blocking(UIMessage::Close);
+                        });
+
+                        let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);
+                        let auto_send_clone2 = Arc::clone(&auto_send_slot_clone);
+                        dialog.set_on_stop_and_send(move |dest_num| {
+                            tracing::info!("Stop and send to slot {} requested", dest_num);
+
+                            // Store the destination slot for auto-send
+                            *auto_send_clone2.lock().unwrap() = Some(dest_num);
+
+                            // Trigger stop to finalize transcription
+                            let stop_tx_lock = stop_tx_clone2.lock().unwrap();
+                            if let Some(ref tx) = *stop_tx_lock {
+                                let _ = tx.send(RecordingCommand::Stop);
+                            }
                         });
 
                         dialog.setup_key_handlers();
@@ -368,11 +351,74 @@ async fn main() -> Result<()> {
                         dialog.update_state(TranscriptionState::Recording, "Listening...", 0.0);
                         dialog.present();
 
+                        // Setup multi-slot handler in background if requested
+                        if multi_slot_handler == MultiSlotHandler::Kitty {
+                            let ui_tx_for_kitty = ui_tx.clone();
+                            thread::spawn(move || {
+                                tracing::info!("Background: Starting Kitty window discovery");
+
+                                match list_kitty_windows() {
+                                    Ok(data) => {
+                                        let claude_windows = find_claude_windows(&data);
+                                        tracing::info!("Background: Found {} Claude windows", claude_windows.len());
+
+                                        if !claude_windows.is_empty() {
+                                            let palette = Palette::new("#1e1e2e");
+                                            let mut destinations = Vec::new();
+
+                                            // Set colors and env vars, build destination slots
+                                            for (i, window) in claude_windows.iter().enumerate().take(4) {
+                                                let slot_num = i + 1;
+                                                if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                                                    // Set background color
+                                                    if let Err(e) = set_background_color(color_hex, window.id) {
+                                                        tracing::warn!("Failed to set background color for window {}: {}", window.id, e);
+                                                    } else {
+                                                        tracing::debug!("Set background color {} for window {}", color_hex, window.id);
+                                                    }
+
+                                                    // Set environment variable
+                                                    let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
+                                                    if let Err(e) = set_window_env_var(&env_var_name, "1", window.id) {
+                                                        tracing::warn!("Failed to set env var {} for window {}: {}", env_var_name, window.id, e);
+                                                    } else {
+                                                        tracing::debug!("Set env var {} for window {}", env_var_name, window.id);
+                                                    }
+
+                                                    // Create destination slot with label
+                                                    let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
+                                                    destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+                                                }
+                                            }
+
+                                            // Fill remaining slots as empty
+                                            for i in claude_windows.len()..4 {
+                                                let slot_num = i + 1;
+                                                if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                                                    destinations.push(DestinationSlot::empty(slot_num, color_hex.to_string()));
+                                                }
+                                            }
+
+                                            // Send destinations to UI
+                                            tracing::info!("Background: Sending {} destination slots to UI", destinations.len());
+                                            let _ = ui_tx_for_kitty.send_blocking(UIMessage::SetDestinations(destinations));
+                                        } else {
+                                            tracing::info!("Background: No Claude windows found");
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Background: Failed to list Kitty windows: {}", e);
+                                    }
+                                }
+                            });
+                        }
+
                         // Start recording in background
                         let config_clone = config_clone.clone();
                         let transcriber_clone = Arc::clone(&transcriber_clone);
                         let ui_tx_for_recording = ui_tx.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
+                        let auto_send_for_recording = Arc::clone(&auto_send_slot_clone);
 
                         thread::spawn(move || {
                             match start_recording_session(
@@ -382,6 +428,7 @@ async fn main() -> Result<()> {
                                 stop_tx_storage.clone(),
                                 unmute_source,
                                 source,
+                                auto_send_for_recording.clone(),
                             ) {
                                 Ok(_) => {
                                     tracing::info!("Recording session completed");
@@ -390,8 +437,9 @@ async fn main() -> Result<()> {
                                     tracing::error!("Recording session error: {}", e);
                                 }
                             }
-                            // Clear stop_tx when done
+                            // Clear stop_tx and auto_send_slot when done
                             *stop_tx_storage.lock().unwrap() = None;
+                            *auto_send_for_recording.lock().unwrap() = None;
                         });
 
                         *dialog_ref = Some(dialog);
@@ -402,7 +450,10 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                DaemonCommand::Stop => {
+                DaemonCommand::Stop { command_slot } => {
+                    // Store the command slot for auto-send after transcription
+                    *auto_send_slot_clone.lock().unwrap() = Some(command_slot);
+
                     // Trigger manual stop
                     let stop_tx_lock = current_stop_tx_clone.lock().unwrap();
                     if let Some(ref tx) = *stop_tx_lock {
@@ -434,6 +485,7 @@ fn start_recording_session(
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     unmute_source: bool,
     source: Option<String>,
+    auto_send_slot: Arc<Mutex<Option<usize>>>,
 ) -> Result<()> {
     tracing::info!("Starting recording session");
 
@@ -674,6 +726,9 @@ fn start_recording_session(
     // Get final transcription result
     let final_text = accumulated_text.lock().unwrap().clone();
 
+    // Check if we should auto-send to a specific slot
+    let auto_slot = auto_send_slot.lock().unwrap().take();
+
     if final_text.is_empty() {
         // No text yet, do one final transcription
         if !recorded_audio.is_empty() {
@@ -684,12 +739,18 @@ fn start_recording_session(
                 Ok(result) => {
                     let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
                     if !cleaned.is_empty() {
-                        let _ = ui_tx.send_blocking(UIMessage::SetText(cleaned.clone()));
-                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-                            TranscriptionState::Reviewing,
-                            "Ready to send".to_string(),
-                            0.0,
-                        ));
+                        // Auto-send or show for review
+                        if let Some(slot) = auto_slot {
+                            tracing::info!("Auto-sending to slot {}", slot);
+                            let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned, slot));
+                        } else {
+                            let _ = ui_tx.send_blocking(UIMessage::SetText(cleaned.clone()));
+                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                                TranscriptionState::Reviewing,
+                                "Ready to send".to_string(),
+                                0.0,
+                            ));
+                        }
                         return Ok(());
                     }
                 }
@@ -710,22 +771,23 @@ fn start_recording_session(
         return Ok(());
     }
 
-    // Show final result in dialog for review
-    let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));
-    let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-        TranscriptionState::Reviewing,
-        "Ready to send".to_string(),
-        0.0,
-    ));
+    // Auto-send or show final result in dialog for review
+    if let Some(slot) = auto_slot {
+        tracing::info!("Auto-sending to slot {}", slot);
+        let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text, slot));
+    } else {
+        let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));
+        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+            TranscriptionState::Reviewing,
+            "Ready to send".to_string(),
+            0.0,
+        ));
+    }
 
     Ok(())
 }
 
 fn execute_output_command(command_template: &str, text: &str) {
-    execute_output_command_with_window(command_template, text, None);
-}
-
-fn execute_output_command_with_window(command_template: &str, text: &str, window_id: Option<u64>) {
     tracing::info!(transcription = text, command_template, "Executing command");
 
     // Pass transcription via environment variable to prevent shell injection
@@ -733,12 +795,6 @@ fn execute_output_command_with_window(command_template: &str, text: &str, window
     cmd.arg("-c")
         .arg(command_template)
         .env("TRANSCRIPTION", text);
-
-    // If window_id is provided, also set KITTY_WINDOW_ID for kitty @ commands
-    if let Some(id) = window_id {
-        cmd.env("KITTY_WINDOW_ID", id.to_string());
-        tracing::info!(kitty_window_id = id, "Set KITTY_WINDOW_ID");
-    }
 
     match cmd.output() {
         Ok(output) => {
