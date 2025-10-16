@@ -19,9 +19,7 @@ pub struct ClientConfig {
 
 impl Default for ClientConfig {
     fn default() -> Self {
-        Self {
-            source: None,
-        }
+        Self { source: None }
     }
 }
 
@@ -60,6 +58,9 @@ pub struct Config {
     #[serde(default, alias = "kitty-mode")]
     pub kitty_mode: bool,
 
+    #[serde(default, alias = "kitty-background-color-cmd")]
+    pub kitty_background_color_cmd: Option<String>,
+
     #[serde(default = "default_socket_name", alias = "socket-name")]
     pub socket_name: String,
 }
@@ -78,6 +79,7 @@ impl Default for Config {
             output_command_3: None,
             output_command_4: None,
             kitty_mode: false,
+            kitty_background_color_cmd: None,
             socket_name: default_socket_name(),
         }
     }
@@ -107,7 +109,6 @@ fn default_socket_name() -> String {
     "stentor.sock".to_string()
 }
 
-
 impl ClientConfig {
     /// Load client configuration from XDG config directory
     #[allow(dead_code)] // Used in client binary
@@ -116,11 +117,13 @@ impl ClientConfig {
 
         // Try to find config file
         if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
-            let contents = std::fs::read_to_string(&config_path)
-                .with_context(|| format!("Failed to read config file: {}", config_path.display()))?;
+            let contents = std::fs::read_to_string(&config_path).with_context(|| {
+                format!("Failed to read config file: {}", config_path.display())
+            })?;
 
-            let config_file: ConfigFile = toml::from_str(&contents)
-                .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
+            let config_file: ConfigFile = toml::from_str(&contents).with_context(|| {
+                format!("Failed to parse config file: {}", config_path.display())
+            })?;
 
             Ok(config_file.client)
         } else {
@@ -192,8 +195,7 @@ impl Config {
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
 
-        let contents = toml::to_string_pretty(self)
-            .context("Failed to serialize configuration")?;
+        let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
 
         std::fs::write(&path, contents)
             .with_context(|| format!("Failed to write config file: {}", path.display()))?;
@@ -239,6 +241,9 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.model, "tiny");
         assert_eq!(config.language, "en"); // default
-        assert_eq!(config.output_command, Some("tmux load-buffer -".to_string()));
+        assert_eq!(
+            config.output_command,
+            Some("tmux load-buffer -".to_string())
+        );
     }
 }
