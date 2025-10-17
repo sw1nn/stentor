@@ -28,6 +28,12 @@ enum ClientCommand {
         #[arg(long, default_value = "0")]
         slot: usize,
     },
+    /// Launch a new terminal window with STENTOR_SLOT env var
+    Launch {
+        /// Command to run in the new window (defaults to shell if not specified)
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// Query daemon status
     Status,
     /// Quit the daemon
@@ -99,6 +105,11 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Handle launch command locally (doesn't need daemon)
+    if let ClientCommand::Launch { command } = &client_command {
+        return launch_command(command);
+    }
+
     // Load configs to get socket path and client settings
     let config = Config::load().context("Failed to load configuration")?;
     let client_config = ClientConfig::load().context("Failed to load client configuration")?;
@@ -143,6 +154,7 @@ async fn main() -> Result<()> {
         Status => DaemonCommand::Status,
         Quit => DaemonCommand::Quit,
         ListSources => unreachable!("ListSources handled above"),
+        Launch { .. } => unreachable!("Launch handled above"),
     };
 
     // Serialize to JSON
@@ -211,5 +223,28 @@ fn list_sources() -> Result<()> {
     println!("  [client]");
     println!("  source = \"SOURCE_NAME\"");
 
+    Ok(())
+}
+
+fn launch_command(command: &[String]) -> Result<()> {
+    use stentor::kitty;
+
+    // Find next available slot
+    let slot = kitty::find_available_slot()
+        .context("Failed to discover available slots")?;
+
+    let slot = match slot {
+        Some(s) => s,
+        None => {
+            eprintln!("ERROR: All slots (1-4) are occupied. Close a stentor window to free a slot.");
+            std::process::exit(1);
+        }
+    };
+
+    // Launch window with the slot
+    kitty::launch_with_slot(slot, command)
+        .context("Failed to launch kitty window")?;
+
+    println!("Launched window in slot {}", slot);
     Ok(())
 }

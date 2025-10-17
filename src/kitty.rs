@@ -242,6 +242,83 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
     stentor_windows
 }
 
+/// Find the next available STENTOR_SLOT (1-4)
+/// Returns None if all slots are occupied
+pub fn find_available_slot() -> Result<Option<usize>> {
+    let data = list_kitty_windows()?;
+
+    // Extract slot numbers from existing windows
+    let mut occupied_slots = std::collections::HashSet::new();
+
+    if let Some(os_windows) = data.as_array() {
+        for os_window in os_windows {
+            if let Some(tabs) = os_window.get("tabs").and_then(|t| t.as_array()) {
+                for tab in tabs {
+                    if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
+                        for window in windows {
+                            if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
+                                if let Some(slot_str) = env.get("STENTOR_SLOT").and_then(|v| v.as_str()) {
+                                    if let Ok(slot_num) = slot_str.parse::<usize>() {
+                                        if slot_num >= 1 && slot_num <= 4 {
+                                            occupied_slots.insert(slot_num);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Find first available slot
+    for slot in 1..=4 {
+        if !occupied_slots.contains(&slot) {
+            tracing::info!("Found available slot: {}", slot);
+            return Ok(Some(slot));
+        }
+    }
+
+    tracing::warn!("No available slots (all 4 slots occupied)");
+    Ok(None)
+}
+
+/// Launch a new Kitty window with the given command and STENTOR_SLOT env var
+pub fn launch_with_slot(slot: usize, command: &[String]) -> Result<()> {
+    if slot < 1 || slot > 4 {
+        anyhow::bail!("Slot must be between 1 and 4, got {}", slot);
+    }
+
+    // Build the kitty @ launch command
+    let mut cmd = std::process::Command::new("kitty");
+    cmd.arg("@")
+        .arg("launch")
+        .arg("--cwd=current")
+        .arg("--env")
+        .arg(format!("STENTOR_SLOT={}", slot));
+
+    // Add user command
+    for arg in command {
+        cmd.arg(arg);
+    }
+
+    tracing::info!("Launching kitty window in slot {} with command: {:?}", slot, command);
+
+    let output = cmd.output()
+        .context("Failed to execute kitty @ launch command")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "kitty @ launch failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    tracing::info!("Successfully launched window in slot {}", slot);
+    Ok(())
+}
+
 fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
     let hex = hex.trim_start_matches('#');
     let color_str = if hex.len() == 8 {
