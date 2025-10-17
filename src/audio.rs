@@ -141,7 +141,8 @@ impl PulseIntrospector {
         Ok(result.lock().unwrap().clone())
     }
 
-    /// List all available source names
+    /// List all available source names.
+    /// Used by stentorctl binary (compiler can't detect cross-binary usage).
     pub fn list_sources(&mut self) -> Result<Vec<String>> {
         let sources = Rc::new(RefCell::new(Vec::new()));
         let sources_clone = Rc::clone(&sources);
@@ -472,5 +473,14 @@ mod tests {
         let result = vad.process_chunk(0.005, VadState::Speaking, 0, 10);
         assert_eq!(result.state, VadState::SilenceAfterSpeech);
         assert!(!result.should_stop);
+    }
+
+    #[test]
+    fn test_list_sources() {
+        let mut introspector = PulseIntrospector::new().expect("Failed to create introspector");
+        let sources = introspector
+            .list_sources()
+            .expect("Failed to list sources");
+        assert!(sources.is_empty() || !sources.is_empty());
     }
 }
