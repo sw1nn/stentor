@@ -9,7 +9,7 @@ default-run = "stentord"
 
 [[bin]]
 name = "stentord"
-path = "src/main.rs"
+path = "src/bin/stentord.rs"
 
 [[bin]]
 name = "stentorctl"

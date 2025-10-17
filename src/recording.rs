@@ -1,0 +1,415 @@
+use anyhow::Result;
+use async_channel::Sender;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
+use crate::config::Config;
+use crate::dialog::TranscriptionState;
+use crate::source_mute::SourceMuteManager;
+use crate::transcription::Transcriber;
+
+/// UIMessage types for communication with the daemon app
+/// This is re-exported from daemon_app module
+#[derive(Debug, Clone)]
+pub enum UIMessage {
+    UpdateState(TranscriptionState, String, f64),
+    #[allow(dead_code)]
+    SetMicrophone(String),
+    SetText(String),
+    SetTextPreview(String),
+    AutoSendText(String, usize), // Auto-send text to specified slot (text, slot_num)
+    SetDestinations(Vec<crate::dialog::DestinationSlot>), // Update destination slots
+    StoreHandlerWindowIds(Vec<u64>), // Store window IDs managed by handler
+    Close,
+}
+
+pub fn start_recording_session(
+    config: Config,
+    transcriber: Arc<Transcriber>,
+    ui_tx: Sender<UIMessage>,
+    stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
+    unmute_source: bool,
+    source: Option<String>,
+    auto_send_slot: Arc<AtomicU8>,
+) -> Result<()> {
+    tracing::info!("Starting recording session");
+
+    // Unmute source if requested
+    let _source_manager = if unmute_source {
+        match SourceMuteManager::unmute_if_needed() {
+            Ok(manager) => Some(manager),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to manage source mute state: {}. Continuing anyway.",
+                    e
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // Create audio recorder with optional source selection
+    let recorder = AudioRecorder::new(16000, source)?;
+
+    // Get the ACTUAL sample rate the device is using (not what we requested)
+    let actual_sample_rate = recorder.get_actual_sample_rate()?;
+
+    // Channels for audio data
+    let (chunk_tx, chunk_rx) = std::sync::mpsc::channel::<AudioChunk>();
+    let (stop_tx, stop_rx) = std::sync::mpsc::channel::<RecordingCommand>();
+    let stop_rx = Arc::new(Mutex::new(stop_rx));
+
+    // Store stop_tx BEFORE starting recording so Escape key can use it
+    *stop_tx_storage.lock().unwrap() = Some(stop_tx);
+
+    // Start audio stream (runs in background thread)
+    recorder.start_recording(chunk_tx, stop_rx)?;
+
+    // Use VAD to detect speech start and silence
+    // IMPORTANT: Use the ACTUAL sample rate from the device, not the requested rate
+    // silence_duration is not used for stopping, only for detecting silence state
+    // stop_silence_duration (config.silence_duration) is used to actually stop the session
+    tracing::info!(
+        "VAD initialized: silence_threshold={}, min_speech_duration={}, stop_silence_duration={}, sample_rate={}",
+        config.silence_threshold,
+        config.min_speech_duration,
+        config.silence_duration,
+        actual_sample_rate
+    );
+    let vad = VoiceActivityDetector::new(
+        config.silence_threshold,
+        config.min_speech_duration,
+        config.silence_duration, // Silence duration to trigger stop
+        actual_sample_rate,      // Use ACTUAL sample rate from device
+    );
+
+    let mut recorded_audio: Vec<Vec<f32>> = Vec::new();
+    let accumulated_text = Arc::new(Mutex::new(String::new()));
+    let mut vad_state = VadState::Idle;
+    let mut silence_chunks = 0;
+    let mut speech_chunks = 0;
+    let mut transcription_started = false;
+
+    // For continuous transcription during recording
+    // Re-transcribe all audio every 2 seconds for better accuracy (Whisper needs context)
+    let transcription_interval = std::time::Duration::from_millis(2000);
+    let mut last_transcription = std::time::Instant::now();
+    let transcriber_clone = Arc::clone(&transcriber);
+    let ui_tx_for_transcription = ui_tx.clone();
+    let accumulated_text_clone = Arc::clone(&accumulated_text);
+
+    // Start in Recording state (waiting for speech)
+    let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+        TranscriptionState::Recording,
+        "Listening...".to_string(),
+        0.0,
+    ));
+
+    tracing::info!("Waiting for speech to begin...");
+
+    loop {
+        match chunk_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+            Ok(chunk) => {
+                let rms = chunk.rms;
+                tracing::debug!("Received audio chunk: RMS = {}", rms);
+
+                // Process through VAD
+                let result = vad.process_chunk(rms, vad_state, silence_chunks, speech_chunks);
+                tracing::debug!(
+                    "VAD: state transition {:?} -> {:?}, silence_chunks={}, should_stop={}",
+                    vad_state,
+                    result.state,
+                    silence_chunks,
+                    result.should_stop
+                );
+                vad_state = result.state;
+
+                use VadState::*;
+                match vad_state {
+                    Speaking => {
+                        silence_chunks = 0;
+                        speech_chunks += 1;
+                        recorded_audio.push(chunk.data);
+
+                        // Switch to transcription mode once speech starts
+                        if !transcription_started {
+                            transcription_started = true;
+                            tracing::info!("Speech detected! Starting continuous transcription...");
+                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                                TranscriptionState::Processing,
+                                "Transcribing... (press Escape or stop speaking to finish)"
+                                    .to_string(),
+                                rms as f64,
+                            ));
+                        } else {
+                            // Update UI with audio level during transcription
+                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                                TranscriptionState::Processing,
+                                "Transcribing... (press Escape or stop speaking to finish)"
+                                    .to_string(),
+                                rms as f64,
+                            ));
+                        }
+
+                        // Continuous transcription - re-transcribe ALL audio for accuracy
+                        if last_transcription.elapsed() >= transcription_interval
+                            && !recorded_audio.is_empty()
+                        {
+                            tracing::info!(
+                                "Re-transcribing all {} chunks for accuracy",
+                                recorded_audio.len()
+                            );
+                            last_transcription = std::time::Instant::now();
+
+                            // Clone all accumulated audio for transcription
+                            let audio_flat: Vec<f32> =
+                                recorded_audio.iter().flatten().copied().collect();
+                            let transcriber_ref = Arc::clone(&transcriber_clone);
+                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
+                            let text_accumulator = Arc::clone(&accumulated_text_clone);
+
+                            // Spawn transcription in background to avoid blocking recording
+                            thread::spawn(move || {
+                                // Build up full text from all segments
+                                let full_text = Arc::new(Mutex::new(String::new()));
+                                let full_text_clone = Arc::clone(&full_text);
+
+                                match transcriber_ref.transcribe_with_realtime_callback(
+                                    &audio_flat,
+                                    move |segment| {
+                                        // Skip [BLANK_AUDIO] segments
+                                        if segment.trim() == "[BLANK_AUDIO]" {
+                                            return;
+                                        }
+                                        let mut text = full_text_clone.lock().unwrap();
+                                        if !text.is_empty() && !text.ends_with(' ') {
+                                            text.push(' ');
+                                        }
+                                        text.push_str(segment.trim());
+                                    },
+                                ) {
+                                    Ok(_) => {
+                                        let complete_text = full_text.lock().unwrap().clone();
+                                        if !complete_text.is_empty() {
+                                            // Replace accumulated text with the complete re-transcription
+                                            *text_accumulator.lock().unwrap() =
+                                                complete_text.clone();
+                                            tracing::info!(
+                                                "Complete transcription: '{}'",
+                                                complete_text
+                                            );
+                                            let _ = ui_tx_transcribe.send_blocking(
+                                                UIMessage::SetTextPreview(complete_text),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!("Continuous transcription failed: {}", e);
+                                    }
+                                }
+                            });
+                        }
+                    }
+                    SilenceAfterSpeech => {
+                        silence_chunks += 1;
+                        recorded_audio.push(chunk.data);
+
+                        // Update UI with audio level
+                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                            TranscriptionState::Processing,
+                            "Transcribing... (press Escape or stop speaking to finish)".to_string(),
+                            rms as f64,
+                        ));
+
+                        // Continue transcription during pauses - re-transcribe ALL audio for accuracy
+                        if last_transcription.elapsed() >= transcription_interval
+                            && !recorded_audio.is_empty()
+                        {
+                            tracing::info!(
+                                "Re-transcribing all {} chunks during pause",
+                                recorded_audio.len()
+                            );
+                            last_transcription = std::time::Instant::now();
+
+                            // Clone all accumulated audio for transcription
+                            let audio_flat: Vec<f32> =
+                                recorded_audio.iter().flatten().copied().collect();
+                            let transcriber_ref = Arc::clone(&transcriber_clone);
+                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
+                            let text_accumulator = Arc::clone(&accumulated_text_clone);
+
+                            // Spawn transcription in background to avoid blocking recording
+                            thread::spawn(move || {
+                                // Build up full text from all segments
+                                let full_text = Arc::new(Mutex::new(String::new()));
+                                let full_text_clone = Arc::clone(&full_text);
+
+                                match transcriber_ref.transcribe_with_realtime_callback(
+                                    &audio_flat,
+                                    move |segment| {
+                                        // Skip [BLANK_AUDIO] segments
+                                        if segment.trim() == "[BLANK_AUDIO]" {
+                                            return;
+                                        }
+                                        let mut text = full_text_clone.lock().unwrap();
+                                        if !text.is_empty() && !text.ends_with(' ') {
+                                            text.push(' ');
+                                        }
+                                        text.push_str(segment.trim());
+                                    },
+                                ) {
+                                    Ok(_) => {
+                                        let complete_text = full_text.lock().unwrap().clone();
+                                        if !complete_text.is_empty() {
+                                            // Replace accumulated text with the complete re-transcription
+                                            *text_accumulator.lock().unwrap() =
+                                                complete_text.clone();
+                                            tracing::info!(
+                                                "Complete transcription during pause: '{}'",
+                                                complete_text
+                                            );
+                                            let _ = ui_tx_transcribe.send_blocking(
+                                                UIMessage::SetTextPreview(complete_text),
+                                            );
+                                        }
+                                    }
+                                    Err(e) => {
+                                        tracing::warn!(
+                                            "Continuous transcription during pause failed: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                            });
+                        }
+
+                        if result.should_stop {
+                            tracing::info!(
+                                "VAD detected end of speech (silence duration exceeded)"
+                            );
+                            break;
+                        }
+                    }
+                    Idle => {
+                        // Still waiting for speech
+                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                            TranscriptionState::Recording,
+                            "Listening...".to_string(),
+                            rms as f64,
+                        ));
+                    }
+                }
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                tracing::info!("Audio stream stopped (user pressed Escape)");
+                break;
+            }
+        }
+    }
+
+    // Audio stream cleanup happens automatically in the background thread
+
+    // Get final transcription result
+    let final_text = accumulated_text.lock().unwrap().clone();
+
+    // Check if we should auto-send to a specific slot (atomically retrieve and clear)
+    let slot_value = auto_send_slot.swap(u8::MAX, Ordering::AcqRel);
+    let auto_slot = if slot_value == u8::MAX {
+        None
+    } else {
+        Some(slot_value as usize)
+    };
+
+    if final_text.is_empty() {
+        // No text yet, do one final transcription
+        if !recorded_audio.is_empty() {
+            tracing::info!(
+                "Performing final transcription of {} chunks",
+                recorded_audio.len()
+            );
+            let audio_flat: Vec<f32> = recorded_audio.into_iter().flatten().collect();
+
+            match transcriber.transcribe(&audio_flat) {
+                Ok(result) => {
+                    let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
+                    if !cleaned.is_empty() {
+                        // Auto-send or show for review
+                        if let Some(slot) = auto_slot {
+                            tracing::info!("Auto-sending to slot {}", slot);
+                            let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned, slot));
+                        } else {
+                            let _ = ui_tx.send_blocking(UIMessage::SetText(cleaned.clone()));
+                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                                TranscriptionState::Reviewing,
+                                "Ready to send".to_string(),
+                                0.0,
+                            ));
+                        }
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Final transcription failed: {}", e);
+                }
+            }
+        }
+
+        // Still no text - show error
+        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+            TranscriptionState::Error,
+            "No speech detected".to_string(),
+            0.0,
+        ));
+        thread::sleep(std::time::Duration::from_secs(2));
+        let _ = ui_tx.send_blocking(UIMessage::Close);
+        return Ok(());
+    }
+
+    // Auto-send or show final result in dialog for review
+    if let Some(slot) = auto_slot {
+        tracing::info!("Auto-sending to slot {}", slot);
+        let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text, slot));
+    } else {
+        let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));
+        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+            TranscriptionState::Reviewing,
+            "Ready to send".to_string(),
+            0.0,
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn execute_output_command(command_template: &str, text: &str) {
+    tracing::info!(transcription = text, command_template, "Executing command");
+
+    // Pass transcription via environment variable to prevent shell injection
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg("-c")
+        .arg(command_template)
+        .env("TRANSCRIPTION", text);
+
+    match cmd.status() {
+        Ok(status) => {
+            if !status.success() {
+                tracing::error!(
+                    status = ?status,
+                    "Command failed"
+                );
+            } else {
+                tracing::info!("Command executed successfully");
+            }
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to execute command");
+        }
+    }
+}

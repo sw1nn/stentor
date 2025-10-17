@@ -9,6 +9,30 @@ pub struct ConfigFile {
     pub daemon: Config,
     #[serde(default)]
     pub client: ClientConfig,
+    #[serde(default)]
+    pub kitty: KittyConfig,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KittyConfig {
+    #[serde(default, alias = "background-color-cmd")]
+    pub background_color_cmd: Option<String>,
+
+    #[serde(default = "default_kitty_base_background", alias = "base-background-color")]
+    pub base_background_color: String,
+}
+
+impl Default for KittyConfig {
+    fn default() -> Self {
+        Self {
+            background_color_cmd: None,
+            base_background_color: default_kitty_base_background(),
+        }
+    }
+}
+
+fn default_kitty_base_background() -> String {
+    "#1e1e2e".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -61,9 +85,6 @@ pub struct Config {
     #[serde(default, alias = "output-command-4")]
     pub output_command_4: Option<String>,
 
-    #[serde(default, alias = "kitty-background-color-cmd")]
-    pub kitty_background_color_cmd: Option<String>,
-
     #[serde(default = "default_socket_name", alias = "socket-name")]
     pub socket_name: String,
 }
@@ -81,7 +102,6 @@ impl Default for Config {
             output_command_2: None,
             output_command_3: None,
             output_command_4: None,
-            kitty_background_color_cmd: None,
             socket_name: default_socket_name(),
         }
     }
@@ -109,6 +129,39 @@ fn default_min_speech_duration() -> f32 {
 
 fn default_socket_name() -> String {
     "stentor.sock".to_string()
+}
+
+impl ConfigFile {
+    /// Load full configuration file from XDG config directory
+    pub fn load() -> Result<Self> {
+        let xdg_dirs = BaseDirectories::with_prefix("stentor");
+
+        // Try to find config file
+        if let Some(config_path) = xdg_dirs.find_config_file("config.toml") {
+            let contents = std::fs::read_to_string(&config_path).with_context(|| {
+                format!("Failed to read config file: {}", config_path.display())
+            })?;
+
+            let config_file: ConfigFile = toml::from_str(&contents).with_context(|| {
+                format!("Failed to parse config file: {}", config_path.display())
+            })?;
+
+            Ok(config_file)
+        } else {
+            tracing::info!("No config file found, using defaults");
+            Ok(Self::default())
+        }
+    }
+}
+
+impl Default for ConfigFile {
+    fn default() -> Self {
+        Self {
+            daemon: Config::default(),
+            client: ClientConfig::default(),
+            kitty: KittyConfig::default(),
+        }
+    }
 }
 
 impl ClientConfig {

@@ -400,3 +400,150 @@ pub fn set_window_color_and_env(
     tracing::debug!("Batched commands sent for window {}", window_id);
     Ok(())
 }
+
+use crate::config::KittyConfig;
+use crate::dialog::DestinationSlot;
+use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler};
+use crate::palette::Palette;
+use async_channel::Sender;
+use std::thread;
+
+/// Kitty terminal multi-slot handler implementation
+pub struct KittyMultiSlotHandler {
+    config: KittyConfig,
+}
+
+impl KittyMultiSlotHandler {
+    pub fn new(config: KittyConfig) -> Self {
+        Self { config }
+    }
+
+    fn get_background_color(&self) -> String {
+        // If a custom command is configured, try to use it
+        if let Some(cmd) = &self.config.background_color_cmd {
+            tracing::info!("Retrieving background color using command: {}", cmd);
+
+            match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
+                Ok(output) => {
+                    if output.status.success() {
+                        let color = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                        if !color.is_empty() {
+                            tracing::info!("Retrieved background color: {}", color);
+                            return color;
+                        } else {
+                            tracing::warn!("Command returned empty output, using default");
+                        }
+                    } else {
+                        tracing::warn!(
+                            "Command failed with status {:?}: {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to execute background color retrieval command: {}",
+                        e
+                    );
+                }
+            }
+        }
+
+        // Fall back to configured base background color
+        tracing::info!("Using configured background color: {}", self.config.base_background_color);
+        self.config.base_background_color.clone()
+    }
+}
+
+impl MultiSlotHandler for KittyMultiSlotHandler {
+    fn setup(&self, ui_tx: Sender<HandlerUIMessage>) -> Result<()> {
+        // Immediately show inactive slots so Ctrl+1-4 labels are visible
+        let mut inactive_destinations = Vec::new();
+        for slot_num in 1..=4 {
+            inactive_destinations.push(DestinationSlot::inactive(slot_num));
+        }
+        let _ = ui_tx.send_blocking(HandlerUIMessage::SetDestinations(inactive_destinations));
+        tracing::info!("Initialized 4 inactive destination slots");
+
+        // Clone ui_tx for thread
+        let ui_tx_for_kitty = ui_tx.clone();
+        let base_bg = self.config.base_background_color.clone();
+
+        thread::spawn(move || {
+            tracing::info!("Background: Starting Kitty window discovery");
+
+            match list_kitty_windows() {
+                Ok(data) => {
+                    let stentor_windows = find_stentor_windows(&data);
+                    tracing::info!("Background: Found {} STENTOR windows", stentor_windows.len());
+
+                    let palette = Palette::new(&base_bg);
+                    let mut destinations = Vec::new();
+                    let mut modified_window_ids = Vec::new();
+
+                    // Process each found window and update UI incrementally
+                    for (i, window) in stentor_windows.iter().enumerate().take(4) {
+                        let slot_num = i + 1;
+                        if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
+                            // Set background color and env var in one batched call
+                            let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
+                            if let Err(e) = set_window_color_and_env(color_hex, &env_var_name, "1", window.id) {
+                                tracing::warn!("Failed to set color and env var for window {}: {}", window.id, e);
+                            } else {
+                                tracing::debug!("Set color {} and env var {} for window {}", color_hex, env_var_name, window.id);
+                                modified_window_ids.push(window.id);
+                            }
+
+                            // Create destination slot with label and send immediately
+                            let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
+                            destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+
+                            // Update UI incrementally - send current state after each window is processed
+                            let mut current_destinations = destinations.clone();
+                            // Add remaining slots as inactive
+                            for j in (i + 1)..4 {
+                                current_destinations.push(DestinationSlot::inactive(j + 1));
+                            }
+                            tracing::debug!("Background: Sending incremental update for slot {}", slot_num);
+                            let _ = ui_tx_for_kitty.send_blocking(HandlerUIMessage::SetDestinations(current_destinations));
+                        }
+                    }
+
+                    // Store window IDs for cleanup
+                    if !modified_window_ids.is_empty() {
+                        let _ = ui_tx_for_kitty.send_blocking(HandlerUIMessage::StoreWindowIds(modified_window_ids));
+                    }
+
+                    // If no windows were found, the initial inactive slots are already showing
+                    tracing::info!("Background: Finished processing {} STENTOR windows", stentor_windows.len());
+                }
+                Err(e) => {
+                    tracing::warn!("Background: Failed to list Kitty windows: {}", e);
+                    // Empty slots are already showing from initial setup, no need to update
+                }
+            }
+        });
+
+        Ok(())
+    }
+
+    fn cleanup(&self, window_ids: Vec<u64>) -> Result<()> {
+        if window_ids.is_empty() {
+            return Ok(());
+        }
+
+        let background_color = self.get_background_color();
+        tracing::info!("Resetting background color for {} Kitty windows to {}", window_ids.len(), background_color);
+
+        for window_id in window_ids {
+            if let Err(e) = set_background_color(&background_color, window_id) {
+                tracing::warn!("Failed to reset background color for window {}: {}", window_id, e);
+            } else {
+                tracing::debug!("Reset background color for window {}", window_id);
+            }
+        }
+
+        Ok(())
+    }
+}

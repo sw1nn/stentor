@@ -1,8 +1,12 @@
 pub mod audio;
 pub mod config;
 pub mod daemon;
+pub mod daemon_app;
 pub mod dialog;
 pub mod keyboard;
 pub mod kitty;
+pub mod multi_slot;
 pub mod palette;
+pub mod recording;
+pub mod source_mute;
 pub mod transcription;
