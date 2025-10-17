@@ -15,11 +15,17 @@ pub struct ConfigFile {
 pub struct ClientConfig {
     #[serde(default)]
     pub source: Option<String>,
+
+    #[serde(default, alias = "multi-slot-handler")]
+    pub multi_slot_handler: Option<crate::daemon::MultiSlotHandler>,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
-        Self { source: None }
+        Self {
+            source: None,
+            multi_slot_handler: None,
+        }
     }
 }
 
@@ -55,9 +61,6 @@ pub struct Config {
     #[serde(default, alias = "output-command-4")]
     pub output_command_4: Option<String>,
 
-    #[serde(default, alias = "kitty-mode")]
-    pub kitty_mode: bool,
-
     #[serde(default, alias = "kitty-background-color-cmd")]
     pub kitty_background_color_cmd: Option<String>,
 
@@ -78,7 +81,6 @@ impl Default for Config {
             output_command_2: None,
             output_command_3: None,
             output_command_4: None,
-            kitty_mode: false,
             kitty_background_color_cmd: None,
             socket_name: default_socket_name(),
         }

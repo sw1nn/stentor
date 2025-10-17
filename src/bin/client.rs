@@ -130,13 +130,7 @@ async fn main() -> Result<()> {
 
             // Determine multi-slot handler from CLI arg or config
             let multi_slot_handler = multi_slot_handler
-                .or_else(|| {
-                    if config.kitty_mode {
-                        Some(MultiSlotHandler::Kitty)
-                    } else {
-                        None
-                    }
-                })
+                .or(client_config.multi_slot_handler)
                 .unwrap_or(MultiSlotHandler::None);
 
             DaemonCommand::Start {
