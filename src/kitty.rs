@@ -194,8 +194,8 @@ pub fn list_kitty_windows() -> Result<Value> {
     anyhow::bail!("Failed to parse Kitty response")
 }
 
-pub fn find_claude_windows(data: &Value) -> Vec<ClaudeWindow> {
-    let mut claude_windows = Vec::new();
+pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
+    let mut stentor_windows = Vec::new();
 
     if let Some(os_windows) = data.as_array() {
         tracing::debug!("Scanning {} OS window(s)", os_windows.len());
@@ -204,37 +204,32 @@ pub fn find_claude_windows(data: &Value) -> Vec<ClaudeWindow> {
                 for tab in tabs {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
-                            if let Some(processes) = window
-                                .get("foreground_processes")
-                                .and_then(|p| p.as_array())
-                            {
-                                for process in processes {
-                                    if let Some(cmdline) =
-                                        process.get("cmdline").and_then(|c| c.as_array())
-                                    {
-                                        if let Some(first_arg) =
-                                            cmdline.get(0).and_then(|a| a.as_str())
-                                        {
-                                            if first_arg == "claude" {
-                                                if let Some(id) =
-                                                    window.get("id").and_then(|i| i.as_u64())
-                                                {
-                                                    let cwd = window
-                                                        .get("cwd")
-                                                        .and_then(|c| c.as_str())
-                                                        .unwrap_or("unknown")
-                                                        .to_string();
-                                                    tracing::debug!(
-                                                        "Found Claude window: id={}, cwd={}",
-                                                        id,
-                                                        cwd
-                                                    );
-                                                    claude_windows.push(ClaudeWindow { id, cwd });
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+                            // Check if window has STENTOR_SLOT env var
+                            let has_stentor_slot = if let Some(user_vars) = window.get("env") {
+                                user_vars
+                                    .as_object()
+                                    .map_or(false, |vars| vars.keys().any(|k| k == "STENTOR_SLOT"))
+                            } else {
+                                false
+                            };
+
+                            if !has_stentor_slot {
+                                continue;
+                            }
+
+                            // Window has STENTOR_SLOT - include it
+                            if let Some(id) = window.get("id").and_then(|i| i.as_u64()) {
+                                let cwd = window
+                                    .get("cwd")
+                                    .and_then(|c| c.as_str())
+                                    .unwrap_or("unknown")
+                                    .to_string();
+                                tracing::debug!(
+                                    "Found STENTOR_SLOT window: id={}, cwd={}",
+                                    id,
+                                    cwd
+                                );
+                                stentor_windows.push(ClaudeWindow { id, cwd });
                             }
                         }
                     }
@@ -243,8 +238,8 @@ pub fn find_claude_windows(data: &Value) -> Vec<ClaudeWindow> {
         }
     }
 
-    tracing::debug!("Total Claude windows found: {}", claude_windows.len());
-    claude_windows
+    tracing::debug!("Total STENTOR windows found: {}", stentor_windows.len());
+    stentor_windows
 }
 
 fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
@@ -376,10 +371,7 @@ pub fn set_window_color_and_env(
     let mut vars = HashMap::new();
     vars.insert(env_var_name.to_string(), env_var_value.to_string());
 
-    let env_payload = SetUserVarsPayload {
-        match_window,
-        vars,
-    };
+    let env_payload = SetUserVarsPayload { match_window, vars };
 
     let env_cmd = KittyCommand {
         cmd: "set-user-vars".to_string(),
@@ -391,7 +383,10 @@ pub fn set_window_color_and_env(
     let color_json = serde_json::to_string(&color_cmd)?;
     let env_json = serde_json::to_string(&env_cmd)?;
 
-    tracing::debug!("Sending batched commands for window {} (fire-and-forget)", window_id);
+    tracing::debug!(
+        "Sending batched commands for window {} (fire-and-forget)",
+        window_id
+    );
 
     // Send both commands without waiting for responses (fire-and-forget)
     let color_encoded = format!("\x1bP@kitty-cmd{}\x1b\\", color_json);

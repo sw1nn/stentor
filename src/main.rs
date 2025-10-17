@@ -27,7 +27,7 @@ use config::Config;
 use daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use dialog::{DestinationSlot, TranscriptionDialog, TranscriptionState};
 use kitty::{
-    find_claude_windows, list_kitty_windows, set_background_color, set_window_color_and_env,
+    find_stentor_windows, list_kitty_windows, set_background_color, set_window_color_and_env,
 };
 use palette::Palette;
 use source_mute::SourceMuteManager;
@@ -453,15 +453,15 @@ async fn main() -> Result<()> {
 
                                 match list_kitty_windows() {
                                     Ok(data) => {
-                                        let claude_windows = find_claude_windows(&data);
-                                        tracing::info!("Background: Found {} Claude windows", claude_windows.len());
+                                        let stentor_windows = find_stentor_windows(&data);
+                                        tracing::info!("Background: Found {} STENTOR windows", stentor_windows.len());
 
                                         let palette = Palette::new("#1e1e2e");
                                         let mut destinations = Vec::new();
                                         let mut modified_window_ids = Vec::new();
 
                                         // Process each found window and update UI incrementally
-                                        for (i, window) in claude_windows.iter().enumerate().take(4) {
+                                        for (i, window) in stentor_windows.iter().enumerate().take(4) {
                                             let slot_num = i + 1;
                                             if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
                                                 // Set background color and env var in one batched call
@@ -494,7 +494,7 @@ async fn main() -> Result<()> {
                                         }
 
                                         // If no windows were found, the initial inactive slots are already showing
-                                        tracing::info!("Background: Finished processing {} Claude windows", claude_windows.len());
+                                        tracing::info!("Background: Finished processing {} STENTOR windows", stentor_windows.len());
                                     }
                                     Err(e) => {
                                         tracing::warn!("Background: Failed to list Kitty windows: {}", e);
