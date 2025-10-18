@@ -5,6 +5,20 @@ use gtk4::{
 };
 use std::sync::{Arc, Mutex};
 
+fn slot_unicode_char(slot_num: usize) -> char {
+    match slot_num {
+        1 => '\u{F03A5}', // 󰎥
+        2 => '\u{F03A8}', // 󰎨
+        3 => '\u{F03AB}', // 󰎫
+        4 => '\u{F03B2}', // 󰎲
+        5 => '\u{F03AF}', // 󰎯
+        6 => '\u{F03B4}', // 󰎴
+        7 => '\u{F03B7}', // 󰎷
+        8 => '\u{F03BA}', // 󰎺
+        _ => '?',
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct DestinationSlot {
     pub label: String,
@@ -21,7 +35,7 @@ impl DestinationSlot {
 
     pub fn with_label(slot_num: usize, label: String, color_hex: String) -> Self {
         Self {
-            label: format!("Ctrl+{}: {}", slot_num, label),
+            label: format!("{}  {}", slot_unicode_char(slot_num), label),
             color_hex,
         }
     }
