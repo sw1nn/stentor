@@ -344,8 +344,8 @@ impl TranscriptionDialog {
                 return glib::Propagation::Stop;
             }
 
-            // Ctrl+1 through Ctrl+4 key handling - stop and send to specific destination
-            if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+            // Meta+1 through Meta+4 key handling - stop and send to specific destination
+            if modifiers.contains(gdk::ModifierType::META_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
@@ -442,8 +442,8 @@ impl TranscriptionDialog {
                 return glib::Propagation::Stop;
             }
 
-            // Ctrl+1 through Ctrl+4 in text view
-            if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+            // Meta+1 through Meta+4 in text view
+            if modifiers.contains(gdk::ModifierType::META_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
