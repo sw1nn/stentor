@@ -344,13 +344,17 @@ impl TranscriptionDialog {
                 return glib::Propagation::Stop;
             }
 
-            // Meta+1 through Meta+4 key handling - stop and send to specific destination
-            if modifiers.contains(gdk::ModifierType::META_MASK) {
+            // Alt+1 through Alt+8 key handling - stop and send to specific destination
+            if modifiers.contains(gdk::ModifierType::ALT_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
                     gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
                     gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
+                    gdk::Key::_5 | gdk::Key::KP_5 => Some(5),
+                    gdk::Key::_6 | gdk::Key::KP_6 => Some(6),
+                    gdk::Key::_7 | gdk::Key::KP_7 => Some(7),
+                    gdk::Key::_8 | gdk::Key::KP_8 => Some(8),
                     _ => None,
                 };
 
@@ -442,13 +446,17 @@ impl TranscriptionDialog {
                 return glib::Propagation::Stop;
             }
 
-            // Meta+1 through Meta+4 in text view
-            if modifiers.contains(gdk::ModifierType::META_MASK) {
+            // Alt+1 through Alt+8 in text view
+            if modifiers.contains(gdk::ModifierType::ALT_MASK) {
                 let dest_num = match keyval {
                     gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
                     gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
                     gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
                     gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
+                    gdk::Key::_5 | gdk::Key::KP_5 => Some(5),
+                    gdk::Key::_6 | gdk::Key::KP_6 => Some(6),
+                    gdk::Key::_7 | gdk::Key::KP_7 => Some(7),
+                    gdk::Key::_8 | gdk::Key::KP_8 => Some(8),
                     _ => None,
                 };
 
