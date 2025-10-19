@@ -485,6 +485,51 @@ use crate::palette::Palette;
 use async_channel::Sender;
 use std::thread;
 
+/// Get a label for a directory, using git branch name if available
+/// If in a git repository, returns "repo\nbranch_name"
+/// Repo name is extracted from the remote origin URL
+/// Otherwise returns the last directory component
+fn parse_worktree_label(cwd: &str) -> String {
+    // Try to get the git branch name
+    let branch_output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(cwd)
+        .arg("branch")
+        .arg("--show-current")
+        .output();
+
+    if let Ok(output) = branch_output {
+        if output.status.success() {
+            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !branch.is_empty() {
+                // Get the remote origin URL
+                let origin_output = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(cwd)
+                    .arg("remote")
+                    .arg("get-url")
+                    .arg("origin")
+                    .output();
+
+                if let Ok(origin) = origin_output {
+                    if origin.status.success() {
+                        let origin_url = String::from_utf8_lossy(&origin.stdout).trim().to_string();
+                        // Extract repo name from URL (last segment, without .git)
+                        if let Some(repo_name) = origin_url.split('/').last() {
+                            let repo_name = repo_name.trim_end_matches(".git");
+                            // Return multi-line label: repo name on first line, branch on second
+                            return format!("{}\n{}", repo_name, branch);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to last directory component
+    cwd.split('/').last().unwrap_or(cwd).to_string()
+}
+
 /// Kitty terminal multi-slot handler implementation
 pub struct KittyMultiSlotHandler {
     config: KittyConfig,
@@ -573,7 +618,8 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                             }
 
                             // Create destination slot with label and send immediately
-                            let label = window.cwd.split('/').last().unwrap_or(&window.cwd).to_string();
+                            // Parse the path to check if it's a worktree
+                            let label = parse_worktree_label(&window.cwd);
                             destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
 
                             // Update UI incrementally - send current state after each window is processed

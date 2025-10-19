@@ -211,8 +211,30 @@ impl TranscriptionDialog {
 
         for (i, slot) in destinations.iter().enumerate().take(8) {
             if let Some(button) = self.destination_buttons.get(i) {
-                // Set the button label text
-                button.set_label(&slot.label);
+                // Parse label for multi-line support
+                let lines: Vec<&str> = slot.label.split('\n').collect();
+
+                if lines.len() > 1 {
+                    // Multi-line label: create a vertical box with styled labels
+                    let vbox = Box::new(Orientation::Vertical, 2);
+
+                    // First line (repo name) - regular color
+                    let line1 = Label::new(Some(lines[0]));
+                    line1.set_markup(&format!("<small>{}</small>", lines[0]));
+                    vbox.append(&line1);
+
+                    // Second line (worktree name) - dimmed color
+                    if let Some(line2_text) = lines.get(1) {
+                        let line2 = Label::new(Some(line2_text));
+                        line2.set_markup(&format!("<small><span foreground='#888888'>{}</span></small>", line2_text));
+                        vbox.append(&line2);
+                    }
+
+                    button.set_child(Some(&vbox));
+                } else {
+                    // Single line label
+                    button.set_label(&slot.label);
+                }
 
                 // Create CSS provider for background color
                 let css_provider = gtk4::CssProvider::new();
