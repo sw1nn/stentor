@@ -1,4 +1,4 @@
 pkg/
 src/
 *.pkg.tar.zst
-sw1nn-transcription/
+stentor/

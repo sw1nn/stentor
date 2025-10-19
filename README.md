@@ -1,4 +1,4 @@
-# sw1nn-transcription
+# stentor
 
 Real-time voice transcription with Whisper.
 
@@ -13,12 +13,12 @@ makepkg -si
 
 Enable and start the systemd user service:
 ```bash
-systemctl --user enable --now sw1nn-transcription.service
+systemctl --user enable --now stentor.service
 ```
 
 Check service status:
 ```bash
-systemctl --user status sw1nn-transcription.service
+systemctl --user status stentor.service
 ```
 
 ## Configuration
@@ -26,7 +26,7 @@ systemctl --user status sw1nn-transcription.service
 Copy the sample configuration:
 ```bash
 mkdir -p ${XDG_CONFIG_HOME:-~/.config}/stentor
-cp /usr/share/doc/sw1nn-transcription/config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
+cp /usr/share/doc/stentor/config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 ```
 
 Edit `${XDG_CONFIG_HOME}/stentor/config.toml` to customize settings.
