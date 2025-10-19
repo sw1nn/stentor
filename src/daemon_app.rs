@@ -317,6 +317,7 @@ pub async fn run(
                         });
 
                         dialog.setup_key_handlers();
+                        dialog.setup_destination_click_handlers();
 
                         let ui_tx_for_close_handler = ui_tx.clone();
                         dialog.connect_close_handler(move || {

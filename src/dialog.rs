@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box, Label, LevelBar, Orientation, ScrolledWindow, Spinner,
-    TextView, gdk, glib,
+    Application, ApplicationWindow, Box, Button, Label, LevelBar, Orientation, ScrolledWindow,
+    Spinner, TextView, gdk, glib,
 };
 use std::sync::{Arc, Mutex};
 
@@ -63,7 +63,7 @@ pub struct TranscriptionDialog {
     text_view: TextView,
     scrolled: ScrolledWindow,
     text_preview: Label,
-    destination_labels: Vec<Label>,
+    destination_buttons: Vec<Button>,
     destination_box: Box,
 
     // Callbacks
@@ -101,17 +101,17 @@ impl TranscriptionDialog {
         level_bar.set_valign(gtk4::Align::Start);
         main_box.append(&level_bar);
 
-        // Destination slots bar (colored labels for Kitty mode)
+        // Destination slots bar (colored buttons for Kitty mode)
         let destination_box = Box::new(Orientation::Horizontal, 0);
         destination_box.set_visible(false); // Hidden by default, shown in Kitty mode
         destination_box.set_homogeneous(true);
-        let mut destination_labels = Vec::new();
-        for _ in 0..4 {
-            let label = Label::new(None);
-            label.set_markup("<small> </small>");
-            label.set_size_request(-1, 24);
-            destination_box.append(&label);
-            destination_labels.push(label);
+        let mut destination_buttons = Vec::new();
+        for _ in 0..8 {
+            let button = Button::new();
+            button.set_label(" ");
+            button.set_size_request(-1, 24);
+            destination_box.append(&button);
+            destination_buttons.push(button);
         }
         main_box.append(&destination_box);
 
@@ -190,7 +190,7 @@ impl TranscriptionDialog {
             text_view,
             scrolled,
             text_preview,
-            destination_labels,
+            destination_buttons,
             destination_box,
             on_manual_stop: None,
             on_send_text: None,
@@ -209,31 +209,73 @@ impl TranscriptionDialog {
 
         self.destination_box.set_visible(true);
 
-        for (i, slot) in destinations.iter().enumerate().take(4) {
-            if let Some(label) = self.destination_labels.get(i) {
-                // Set the label text
-                label.set_markup(&format!("<small>{}</small>", slot.label));
+        for (i, slot) in destinations.iter().enumerate().take(8) {
+            if let Some(button) = self.destination_buttons.get(i) {
+                // Set the button label text
+                button.set_label(&slot.label);
 
                 // Create CSS provider for background color
                 let css_provider = gtk4::CssProvider::new();
                 let css = format!(
-                    "label {{ background-color: {}; padding: 4px 8px; }}",
+                    "button {{ background-color: {}; padding: 4px 8px; font-size: small; }}",
                     slot.color_hex
                 );
                 css_provider.load_from_data(&css);
 
-                // Apply CSS to the label
-                label
+                // Apply CSS to the button
+                button
                     .style_context()
                     .add_provider(&css_provider, gtk4::STYLE_PROVIDER_PRIORITY_APPLICATION);
+
+                button.set_visible(true);
             }
         }
 
         // Hide unused slots
-        for i in destinations.len()..4 {
-            if let Some(label) = self.destination_labels.get(i) {
-                label.set_visible(false);
+        for i in destinations.len()..8 {
+            if let Some(button) = self.destination_buttons.get(i) {
+                button.set_visible(false);
             }
+        }
+    }
+
+    pub fn setup_destination_click_handlers(&self) {
+        // Setup click handlers for destination buttons
+        for (i, button) in self.destination_buttons.iter().enumerate() {
+            let slot_num = i + 1; // Slot numbers are 1-indexed
+            let state = Arc::clone(&self.state);
+            let on_send_text = self.on_send_text.clone();
+            let on_stop_and_send = self.on_stop_and_send.clone();
+            let text_view = self.text_view.clone();
+
+            button.connect_clicked(move |_| {
+                tracing::info!("Destination button {} clicked", slot_num);
+                let current_state = *state.lock().unwrap();
+                use TranscriptionState::*;
+                match current_state {
+                    Recording | Processing => {
+                        // Stop recording and send to specific slot
+                        tracing::info!("Stopping recording and sending to slot {}", slot_num);
+                        if let Some(ref callback) = on_stop_and_send {
+                            callback(slot_num);
+                        }
+                    }
+                    Reviewing => {
+                        // Send text from editable view to specific slot
+                        tracing::info!("Sending text from review to slot {}", slot_num);
+                        if let Some(ref callback) = on_send_text {
+                            let buffer = text_view.buffer();
+                            let text = buffer
+                                .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                .to_string();
+                            callback(text, slot_num);
+                        }
+                    }
+                    _ => {
+                        tracing::warn!("Button clicked in state {:?}, ignoring", current_state);
+                    }
+                }
+            });
         }
     }
 
