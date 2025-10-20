@@ -242,7 +242,7 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
     stentor_windows
 }
 
-/// Find the next available STENTOR_SLOT (1-4)
+/// Find the next available STENTOR_SLOT (1-8)
 /// Returns None if all slots are occupied
 pub fn find_available_slot() -> Result<Option<usize>> {
     let data = list_kitty_windows()?;
@@ -259,7 +259,7 @@ pub fn find_available_slot() -> Result<Option<usize>> {
                             if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
                                 if let Some(slot_str) = env.get("STENTOR_SLOT").and_then(|v| v.as_str()) {
                                     if let Ok(slot_num) = slot_str.parse::<usize>() {
-                                        if slot_num >= 1 && slot_num <= 4 {
+                                        if slot_num >= 1 && slot_num <= 8 {
                                             occupied_slots.insert(slot_num);
                                         }
                                     }
@@ -273,22 +273,26 @@ pub fn find_available_slot() -> Result<Option<usize>> {
     }
 
     // Find first available slot
-    for slot in 1..=4 {
+    for slot in 1..=8 {
         if !occupied_slots.contains(&slot) {
             tracing::info!("Found available slot: {}", slot);
             return Ok(Some(slot));
         }
     }
 
-    tracing::warn!("No available slots (all 4 slots occupied)");
+    tracing::warn!("No available slots (all 8 slots occupied)");
     Ok(None)
 }
 
 /// Launch a new Kitty window with the given command and STENTOR_SLOT env var
+/// If launched from within a Kitty window, closes the current window after successful launch
 pub fn launch_with_slot(slot: usize, command: &[String]) -> Result<()> {
-    if slot < 1 || slot > 4 {
-        anyhow::bail!("Slot must be between 1 and 4, got {}", slot);
+    if slot < 1 || slot > 8 {
+        anyhow::bail!("Slot must be between 1 and 8, got {}", slot);
     }
+
+    // Get current window ID for closing later
+    let current_window_id = env::var("KITTY_WINDOW_ID").ok();
 
     // Build the kitty @ launch command
     let mut cmd = std::process::Command::new("kitty");
@@ -316,6 +320,22 @@ pub fn launch_with_slot(slot: usize, command: &[String]) -> Result<()> {
     }
 
     tracing::info!("Successfully launched window in slot {}", slot);
+
+    // Close the current window if we're running inside Kitty
+    if let Some(window_id) = current_window_id {
+        tracing::info!("Closing current window {}", window_id);
+        let close_result = std::process::Command::new("kitty")
+            .arg("@")
+            .arg("close-window")
+            .arg("--match")
+            .arg(format!("id:{}", window_id))
+            .output();
+
+        if let Err(e) = close_result {
+            tracing::warn!("Failed to close current window: {}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -580,13 +600,13 @@ impl KittyMultiSlotHandler {
 
 impl MultiSlotHandler for KittyMultiSlotHandler {
     fn setup(&self, ui_tx: Sender<HandlerUIMessage>) -> Result<()> {
-        // Immediately show inactive slots so Ctrl+1-4 labels are visible
+        // Immediately show inactive slots so Alt+1-8 labels are visible
         let mut inactive_destinations = Vec::new();
-        for slot_num in 1..=4 {
+        for slot_num in 1..=8 {
             inactive_destinations.push(DestinationSlot::inactive(slot_num));
         }
         let _ = ui_tx.send_blocking(HandlerUIMessage::SetDestinations(inactive_destinations));
-        tracing::info!("Initialized 4 inactive destination slots");
+        tracing::info!("Initialized 8 inactive destination slots");
 
         // Clone ui_tx for thread
         let ui_tx_for_kitty = ui_tx.clone();
@@ -605,7 +625,7 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                     let mut modified_window_ids = Vec::new();
 
                     // Process each found window and update UI incrementally
-                    for (i, window) in stentor_windows.iter().enumerate().take(4) {
+                    for (i, window) in stentor_windows.iter().enumerate().take(8) {
                         let slot_num = i + 1;
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
                             // Set background color and env var in one batched call
@@ -625,7 +645,7 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                             // Update UI incrementally - send current state after each window is processed
                             let mut current_destinations = destinations.clone();
                             // Add remaining slots as inactive
-                            for j in (i + 1)..4 {
+                            for j in (i + 1)..8 {
                                 current_destinations.push(DestinationSlot::inactive(j + 1));
                             }
                             tracing::debug!("Background: Sending incremental update for slot {}", slot_num);

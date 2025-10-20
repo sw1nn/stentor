@@ -236,7 +236,7 @@ fn launch_command(command: &[String]) -> Result<()> {
     let slot = match slot {
         Some(s) => s,
         None => {
-            eprintln!("ERROR: All slots (1-4) are occupied. Close a stentor window to free a slot.");
+            eprintln!("ERROR: All slots (1-8) are occupied. Close a stentor window to free a slot.");
             std::process::exit(1);
         }
     };

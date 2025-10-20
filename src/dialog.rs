@@ -33,9 +33,9 @@ impl DestinationSlot {
         }
     }
 
-    pub fn with_label(slot_num: usize, label: String, color_hex: String) -> Self {
+    pub fn with_label(_slot_num: usize, label: String, color_hex: String) -> Self {
         Self {
-            label: format!("{}  {}", slot_unicode_char(slot_num), label),
+            label,
             color_hex,
         }
     }
@@ -104,12 +104,13 @@ impl TranscriptionDialog {
         // Destination slots bar (colored buttons for Kitty mode)
         let destination_box = Box::new(Orientation::Horizontal, 0);
         destination_box.set_visible(false); // Hidden by default, shown in Kitty mode
-        destination_box.set_homogeneous(true);
+        destination_box.set_homogeneous(false); // Buttons can be different widths
         let mut destination_buttons = Vec::new();
         for _ in 0..8 {
             let button = Button::new();
             button.set_label(" ");
             button.set_size_request(-1, 24);
+            button.set_hexpand(false); // Don't expand horizontally
             destination_box.append(&button);
             destination_buttons.push(button);
         }
@@ -202,7 +203,10 @@ impl TranscriptionDialog {
     }
 
     pub fn set_destinations(&self, destinations: &[DestinationSlot]) {
-        if destinations.is_empty() {
+        // Check if there are any active (non-empty) slots
+        let has_active_slots = destinations.iter().any(|slot| !slot.label.is_empty());
+
+        if !has_active_slots {
             self.destination_box.set_visible(false);
             return;
         }
@@ -211,6 +215,23 @@ impl TranscriptionDialog {
 
         for (i, slot) in destinations.iter().enumerate().take(8) {
             if let Some(button) = self.destination_buttons.get(i) {
+                // Only show button if slot has content
+                if slot.label.is_empty() {
+                    button.set_visible(false);
+                    continue;
+                }
+
+                let slot_num = i + 1;
+
+                // Create horizontal box: icon on left, text on right
+                let hbox = Box::new(Orientation::Horizontal, 6);
+
+                // Icon label (takes up full height)
+                let icon_label = Label::new(Some(&slot_unicode_char(slot_num).to_string()));
+                icon_label.set_markup(&format!("<span size='large'>{}</span>", slot_unicode_char(slot_num)));
+                icon_label.set_valign(gtk4::Align::Center);
+                hbox.append(&icon_label);
+
                 // Parse label for multi-line support
                 let lines: Vec<&str> = slot.label.split('\n').collect();
 
@@ -221,20 +242,28 @@ impl TranscriptionDialog {
                     // First line (repo name) - regular color
                     let line1 = Label::new(Some(lines[0]));
                     line1.set_markup(&format!("<small>{}</small>", lines[0]));
+                    line1.set_xalign(0.0); // Left align
                     vbox.append(&line1);
 
-                    // Second line (worktree name) - dimmed color
+                    // Second line (branch name) - dimmed color
                     if let Some(line2_text) = lines.get(1) {
                         let line2 = Label::new(Some(line2_text));
                         line2.set_markup(&format!("<small><span foreground='#888888'>{}</span></small>", line2_text));
+                        line2.set_xalign(0.0); // Left align
                         vbox.append(&line2);
                     }
 
-                    button.set_child(Some(&vbox));
+                    hbox.append(&vbox);
                 } else {
                     // Single line label
-                    button.set_label(&slot.label);
+                    let text_label = Label::new(Some(&slot.label));
+                    text_label.set_markup(&format!("<small>{}</small>", &slot.label));
+                    text_label.set_xalign(0.0); // Left align
+                    text_label.set_valign(gtk4::Align::Center);
+                    hbox.append(&text_label);
                 }
+
+                button.set_child(Some(&hbox));
 
                 // Create CSS provider for background color
                 let css_provider = gtk4::CssProvider::new();
