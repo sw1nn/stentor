@@ -27,7 +27,7 @@ pub enum UIMessage {
 }
 
 pub fn start_recording_session(
-    config: Config,
+    config: Arc<Config>,
     transcriber: Arc<Transcriber>,
     ui_tx: Sender<UIMessage>,
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,

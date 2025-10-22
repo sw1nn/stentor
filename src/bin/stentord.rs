@@ -119,5 +119,8 @@ async fn main() -> Result<()> {
     };
 
     // Run daemon application
+    // Wrap configs in Arc to avoid cloning throughout the application
+    let config = Arc::new(config);
+    let config_file = Arc::new(config_file);
     stentor::daemon_app::run(config, config_file, transcriber, socket_path).await
 }

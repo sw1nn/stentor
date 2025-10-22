@@ -20,8 +20,8 @@ use crate::recording::{UIMessage, execute_output_command, start_recording_sessio
 use crate::transcription::Transcriber;
 
 pub async fn run(
-    config: Config,
-    config_file: ConfigFile,
+    config: Arc<Config>,
+    config_file: Arc<ConfigFile>,
     transcriber: Arc<Transcriber>,
     socket_path: PathBuf,
 ) -> Result<()> {
@@ -79,8 +79,8 @@ pub async fn run(
     let auto_send_slot_clone = Arc::clone(&auto_send_slot);
     let recording_active_clone = Arc::clone(&recording_active);
     let app_clone = app.clone();
-    let config_clone = config.clone();
-    let config_file_clone = config_file.clone();
+    let config_clone = Arc::clone(&config);
+    let config_file_clone = Arc::clone(&config_file);
     let transcriber_clone = Arc::clone(&transcriber);
 
     // Setup GTK event loop integration with tokio
@@ -353,7 +353,7 @@ pub async fn run(
                         // Note: recording_active flag was already set by compare_exchange above
 
                         // Start recording in background
-                        let config_clone = config_clone.clone();
+                        let config_clone = Arc::clone(&config_clone);
                         let transcriber_clone = Arc::clone(&transcriber_clone);
                         let ui_tx_for_recording = ui_tx.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
