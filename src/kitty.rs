@@ -39,6 +39,7 @@ struct SetUserVarsPayload {
 pub struct ClaudeWindow {
     pub id: u64,
     pub cwd: String,
+    pub slot_num: usize,
 }
 
 fn get_kitty_socket_name() -> Result<String> {
@@ -234,7 +235,7 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                                     cwd,
                                     slot_num
                                 );
-                                stentor_windows.push((slot_num, ClaudeWindow { id, cwd }));
+                                stentor_windows.push((slot_num, ClaudeWindow { id, cwd, slot_num }));
                             }
                         }
                     }
@@ -243,12 +244,10 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
         }
     }
 
-    // Sort by slot number
-    stentor_windows.sort_by_key(|(slot_num, _)| *slot_num);
-
     tracing::debug!("Total STENTOR windows found: {}", stentor_windows.len());
 
-    // Return just the ClaudeWindow structs, now sorted by slot number
+    // Return ClaudeWindow structs in discovery order (not sorted)
+    // This ensures Alt+1, Alt+2, Alt+3, etc. map to the 1st, 2nd, 3rd discovered windows
     stentor_windows.into_iter().map(|(_, window)| window).collect()
 }
 
@@ -636,7 +635,8 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
 
                     // Process each found window and update UI incrementally
                     for (i, window) in stentor_windows.iter().enumerate().take(8) {
-                        let slot_num = i + 1;
+                        // Use the actual STENTOR_SLOT value from the window, not the button index
+                        let slot_num = window.slot_num;
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
                             // Set background color and env var in one batched call
                             let env_var_name = format!("STENTOR_SLOT_{}", slot_num);

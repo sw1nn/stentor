@@ -21,20 +21,23 @@ fn slot_unicode_char(slot_num: usize) -> char {
 
 #[derive(Debug, Clone)]
 pub struct DestinationSlot {
+    pub slot_num: usize,
     pub label: String,
     pub color_hex: String,
 }
 
 impl DestinationSlot {
-    pub fn inactive(_slot_num: usize) -> Self {
+    pub fn inactive(slot_num: usize) -> Self {
         Self {
+            slot_num,
             label: String::new(),                 // Empty label for inactive slots
             color_hex: "transparent".to_string(), // Transparent background for inactive slots
         }
     }
 
-    pub fn with_label(_slot_num: usize, label: String, color_hex: String) -> Self {
+    pub fn with_label(slot_num: usize, label: String, color_hex: String) -> Self {
         Self {
+            slot_num,
             label,
             color_hex,
         }
@@ -65,6 +68,7 @@ pub struct TranscriptionDialog {
     text_preview: Label,
     destination_buttons: Vec<Button>,
     destination_box: Box,
+    destinations: Arc<Mutex<Vec<DestinationSlot>>>,
 
     // Callbacks
     on_manual_stop: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -193,6 +197,7 @@ impl TranscriptionDialog {
             text_preview,
             destination_buttons,
             destination_box,
+            destinations: Arc::new(Mutex::new(Vec::new())),
             on_manual_stop: None,
             on_send_text: None,
             on_cancel: None,
@@ -203,6 +208,9 @@ impl TranscriptionDialog {
     }
 
     pub fn set_destinations(&self, destinations: &[DestinationSlot]) {
+        // Store the destinations for use in click handlers
+        *self.destinations.lock().unwrap() = destinations.to_vec();
+
         // Check if there are any active (non-empty) slots
         let has_active_slots = destinations.iter().any(|slot| !slot.label.is_empty());
 
@@ -293,14 +301,26 @@ impl TranscriptionDialog {
     pub fn setup_destination_click_handlers(&self) {
         // Setup click handlers for destination buttons
         for (i, button) in self.destination_buttons.iter().enumerate() {
-            let slot_num = i + 1; // Slot numbers are 1-indexed
+            let button_index = i;
             let state = Arc::clone(&self.state);
             let on_send_text = self.on_send_text.clone();
             let on_stop_and_send = self.on_stop_and_send.clone();
             let text_view = self.text_view.clone();
+            let destinations = Arc::clone(&self.destinations);
 
             button.connect_clicked(move |_| {
-                tracing::info!("Destination button {} clicked", slot_num);
+                // Get the actual slot_num from the stored destinations
+                let slot_num = {
+                    let dests = destinations.lock().unwrap();
+                    if let Some(dest) = dests.get(button_index) {
+                        dest.slot_num
+                    } else {
+                        tracing::warn!("Button {} clicked but no destination found", button_index);
+                        return;
+                    }
+                };
+
+                tracing::info!("Destination button {} clicked (slot {})", button_index, slot_num);
                 let current_state = *state.lock().unwrap();
                 use TranscriptionState::*;
                 match current_state {
@@ -380,6 +400,7 @@ impl TranscriptionDialog {
         let on_cancel = self.on_cancel.clone();
         let text_view = self.text_view.clone();
         let window = self.window.clone();
+        let destinations = Arc::clone(&self.destinations);
 
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
@@ -439,40 +460,54 @@ impl TranscriptionDialog {
 
             // Alt+1 through Alt+8 key handling - stop and send to specific destination
             if modifiers.contains(gdk::ModifierType::ALT_MASK) {
-                let dest_num = match keyval {
-                    gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
-                    gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
-                    gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
-                    gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
-                    gdk::Key::_5 | gdk::Key::KP_5 => Some(5),
-                    gdk::Key::_6 | gdk::Key::KP_6 => Some(6),
-                    gdk::Key::_7 | gdk::Key::KP_7 => Some(7),
-                    gdk::Key::_8 | gdk::Key::KP_8 => Some(8),
+                // Map key number to button position (0-based index)
+                let button_index = match keyval {
+                    gdk::Key::_1 | gdk::Key::KP_1 => Some(0),
+                    gdk::Key::_2 | gdk::Key::KP_2 => Some(1),
+                    gdk::Key::_3 | gdk::Key::KP_3 => Some(2),
+                    gdk::Key::_4 | gdk::Key::KP_4 => Some(3),
+                    gdk::Key::_5 | gdk::Key::KP_5 => Some(4),
+                    gdk::Key::_6 | gdk::Key::KP_6 => Some(5),
+                    gdk::Key::_7 | gdk::Key::KP_7 => Some(6),
+                    gdk::Key::_8 | gdk::Key::KP_8 => Some(7),
                     _ => None,
                 };
 
-                if let Some(dest) = dest_num {
-                    use TranscriptionState::*;
-                    match current_state {
-                        Recording | Processing => {
-                            // Stop recording and send to specific slot
-                            if let Some(ref callback) = on_stop_and_send {
-                                callback(dest);
-                            }
+                if let Some(idx) = button_index {
+                    // Look up the actual slot_num from the destinations
+                    let slot_num = {
+                        let dests = destinations.lock().unwrap();
+                        if let Some(dest) = dests.get(idx) {
+                            Some(dest.slot_num)
+                        } else {
+                            tracing::warn!("Alt+{} pressed but no destination at position {}", idx + 1, idx);
+                            None
                         }
-                        TranscriptionState::Reviewing => {
-                            // Send text from editable view to specific slot
-                            if let Some(ref callback) = on_send_text {
-                                let buffer = text_view.buffer();
-                                let text = buffer
-                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                    .to_string();
-                                callback(text, dest);
+                    };
+
+                    if let Some(dest) = slot_num {
+                        use TranscriptionState::*;
+                        match current_state {
+                            Recording | Processing => {
+                                // Stop recording and send to specific slot
+                                if let Some(ref callback) = on_stop_and_send {
+                                    callback(dest);
+                                }
                             }
+                            TranscriptionState::Reviewing => {
+                                // Send text from editable view to specific slot
+                                if let Some(ref callback) = on_send_text {
+                                    let buffer = text_view.buffer();
+                                    let text = buffer
+                                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                        .to_string();
+                                    callback(text, dest);
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        return glib::Propagation::Stop;
                     }
-                    return glib::Propagation::Stop;
                 }
             }
 
@@ -486,6 +521,7 @@ impl TranscriptionDialog {
         let on_send_text = self.on_send_text.clone();
         let on_cancel = self.on_cancel.clone();
         let text_view_clone = self.text_view.clone();
+        let destinations_clone = Arc::clone(&self.destinations);
 
         let text_key_controller = gtk4::EventControllerKey::new();
         text_key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
@@ -541,40 +577,54 @@ impl TranscriptionDialog {
 
             // Alt+1 through Alt+8 in text view
             if modifiers.contains(gdk::ModifierType::ALT_MASK) {
-                let dest_num = match keyval {
-                    gdk::Key::_1 | gdk::Key::KP_1 => Some(1),
-                    gdk::Key::_2 | gdk::Key::KP_2 => Some(2),
-                    gdk::Key::_3 | gdk::Key::KP_3 => Some(3),
-                    gdk::Key::_4 | gdk::Key::KP_4 => Some(4),
-                    gdk::Key::_5 | gdk::Key::KP_5 => Some(5),
-                    gdk::Key::_6 | gdk::Key::KP_6 => Some(6),
-                    gdk::Key::_7 | gdk::Key::KP_7 => Some(7),
-                    gdk::Key::_8 | gdk::Key::KP_8 => Some(8),
+                // Map key number to button position (0-based index)
+                let button_index = match keyval {
+                    gdk::Key::_1 | gdk::Key::KP_1 => Some(0),
+                    gdk::Key::_2 | gdk::Key::KP_2 => Some(1),
+                    gdk::Key::_3 | gdk::Key::KP_3 => Some(2),
+                    gdk::Key::_4 | gdk::Key::KP_4 => Some(3),
+                    gdk::Key::_5 | gdk::Key::KP_5 => Some(4),
+                    gdk::Key::_6 | gdk::Key::KP_6 => Some(5),
+                    gdk::Key::_7 | gdk::Key::KP_7 => Some(6),
+                    gdk::Key::_8 | gdk::Key::KP_8 => Some(7),
                     _ => None,
                 };
 
-                if let Some(dest) = dest_num {
-                    use TranscriptionState::*;
-                    match current_state {
-                        Recording | Processing => {
-                            // Stop recording and send to specific slot
-                            if let Some(ref callback) = on_stop_and_send_clone {
-                                callback(dest);
-                            }
+                if let Some(idx) = button_index {
+                    // Look up the actual slot_num from the destinations
+                    let slot_num = {
+                        let dests = destinations_clone.lock().unwrap();
+                        if let Some(dest) = dests.get(idx) {
+                            Some(dest.slot_num)
+                        } else {
+                            tracing::warn!("Alt+{} pressed in text view but no destination at position {}", idx + 1, idx);
+                            None
                         }
-                        Reviewing => {
-                            // Send text from editable view to specific slot
-                            if let Some(ref callback) = on_send_text {
-                                let buffer = text_view_clone.buffer();
-                                let text = buffer
-                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                    .to_string();
-                                callback(text, dest);
+                    };
+
+                    if let Some(dest) = slot_num {
+                        use TranscriptionState::*;
+                        match current_state {
+                            Recording | Processing => {
+                                // Stop recording and send to specific slot
+                                if let Some(ref callback) = on_stop_and_send_clone {
+                                    callback(dest);
+                                }
                             }
+                            Reviewing => {
+                                // Send text from editable view to specific slot
+                                if let Some(ref callback) = on_send_text {
+                                    let buffer = text_view_clone.buffer();
+                                    let text = buffer
+                                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                        .to_string();
+                                    callback(text, dest);
+                                }
+                            }
+                            _ => {}
                         }
-                        _ => {}
+                        return glib::Propagation::Stop;
                     }
-                    return glib::Propagation::Stop;
                 }
             }
 
