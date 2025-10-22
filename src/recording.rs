@@ -90,14 +90,15 @@ pub fn start_recording_session(
     let mut recorded_audio: Vec<Vec<f32>> = Vec::new();
     let accumulated_text = Arc::new(Mutex::new(String::new()));
     let mut vad_state = VadState::Idle;
+    let mut previous_vad_state;
     let mut silence_chunks = 0;
     let mut speech_chunks = 0;
     let mut transcription_started = false;
 
-    // For continuous transcription during recording
-    // Re-transcribe all audio every 2 seconds for better accuracy (Whisper needs context)
-    let transcription_interval = std::time::Duration::from_millis(2000);
-    let mut last_transcription = std::time::Instant::now();
+    // Track if a transcription is currently in flight to prevent concurrent transcriptions
+    // Using Mutex for RAII - holding the lock means transcription is in flight
+    let transcription_in_flight = Arc::new(Mutex::new(()));
+
     let transcriber_clone = Arc::clone(&transcriber);
     let ui_tx_for_transcription = ui_tx.clone();
     let accumulated_text_clone = Arc::clone(&accumulated_text);
@@ -126,7 +127,12 @@ pub fn start_recording_session(
                     silence_chunks,
                     result.should_stop
                 );
+                previous_vad_state = vad_state;
                 vad_state = result.state;
+
+                // Detect transition from Speaking to SilenceAfterSpeech
+                let transitioned_to_silence = previous_vad_state == VadState::Speaking
+                    && vad_state == VadState::SilenceAfterSpeech;
 
                 use VadState::*;
                 match vad_state {
@@ -138,80 +144,21 @@ pub fn start_recording_session(
                         // Switch to transcription mode once speech starts
                         if !transcription_started {
                             transcription_started = true;
-                            tracing::info!("Speech detected! Starting continuous transcription...");
+                            tracing::info!("Speech detected! Transcription will run on pause...");
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
-                                "Transcribing... (press Escape or stop speaking to finish)"
+                                "Recording... (pause or press Escape to transcribe)"
                                     .to_string(),
                                 rms as f64,
                             ));
                         } else {
-                            // Update UI with audio level during transcription
+                            // Update UI with audio level
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
-                                "Transcribing... (press Escape or stop speaking to finish)"
+                                "Recording... (pause or press Escape to transcribe)"
                                     .to_string(),
                                 rms as f64,
                             ));
-                        }
-
-                        // Continuous transcription - re-transcribe ALL audio for accuracy
-                        if last_transcription.elapsed() >= transcription_interval
-                            && !recorded_audio.is_empty()
-                        {
-                            tracing::info!(
-                                "Re-transcribing all {} chunks for accuracy",
-                                recorded_audio.len()
-                            );
-                            last_transcription = std::time::Instant::now();
-
-                            // Clone all accumulated audio for transcription
-                            let audio_flat: Vec<f32> =
-                                recorded_audio.iter().flatten().copied().collect();
-                            let transcriber_ref = Arc::clone(&transcriber_clone);
-                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
-                            let text_accumulator = Arc::clone(&accumulated_text_clone);
-
-                            // Spawn transcription in background to avoid blocking recording
-                            thread::spawn(move || {
-                                // Build up full text from all segments
-                                let full_text = Arc::new(Mutex::new(String::new()));
-                                let full_text_clone = Arc::clone(&full_text);
-
-                                match transcriber_ref.transcribe_with_realtime_callback(
-                                    &audio_flat,
-                                    move |segment| {
-                                        // Skip [BLANK_AUDIO] segments
-                                        if segment.trim() == "[BLANK_AUDIO]" {
-                                            return;
-                                        }
-                                        let mut text = full_text_clone.lock().unwrap();
-                                        if !text.is_empty() && !text.ends_with(' ') {
-                                            text.push(' ');
-                                        }
-                                        text.push_str(segment.trim());
-                                    },
-                                ) {
-                                    Ok(_) => {
-                                        let complete_text = full_text.lock().unwrap().clone();
-                                        if !complete_text.is_empty() {
-                                            // Replace accumulated text with the complete re-transcription
-                                            *text_accumulator.lock().unwrap() =
-                                                complete_text.clone();
-                                            tracing::info!(
-                                                "Complete transcription: '{}'",
-                                                complete_text
-                                            );
-                                            let _ = ui_tx_transcribe.send_blocking(
-                                                UIMessage::SetTextPreview(complete_text),
-                                            );
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::warn!("Continuous transcription failed: {}", e);
-                                    }
-                                }
-                            });
                         }
                     }
                     SilenceAfterSpeech => {
@@ -221,70 +168,76 @@ pub fn start_recording_session(
                         // Update UI with audio level
                         let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                             TranscriptionState::Processing,
-                            "Transcribing... (press Escape or stop speaking to finish)".to_string(),
+                            "Transcribing... (press Escape to finish)".to_string(),
                             rms as f64,
                         ));
 
-                        // Continue transcription during pauses - re-transcribe ALL audio for accuracy
-                        if last_transcription.elapsed() >= transcription_interval
-                            && !recorded_audio.is_empty()
-                        {
-                            tracing::info!(
-                                "Re-transcribing all {} chunks during pause",
-                                recorded_audio.len()
-                            );
-                            last_transcription = std::time::Instant::now();
+                        // Trigger transcription on transition to SilenceAfterSpeech
+                        // Only if no transcription is currently in flight
+                        if transitioned_to_silence && !recorded_audio.is_empty() {
+                            // Try to acquire the lock (non-blocking)
+                            // If we can't acquire it, transcription is already in flight
+                            if let Ok(_guard) = transcription_in_flight.try_lock() {
+                                tracing::info!(
+                                    "Pause detected! Transcribing {} chunks",
+                                    recorded_audio.len()
+                                );
 
-                            // Clone all accumulated audio for transcription
-                            let audio_flat: Vec<f32> =
-                                recorded_audio.iter().flatten().copied().collect();
-                            let transcriber_ref = Arc::clone(&transcriber_clone);
-                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
-                            let text_accumulator = Arc::clone(&accumulated_text_clone);
+                                // Clone all accumulated audio for transcription
+                                let audio_flat: Vec<f32> =
+                                    recorded_audio.iter().flatten().copied().collect();
+                                let transcriber_ref = Arc::clone(&transcriber_clone);
+                                let ui_tx_transcribe = ui_tx_for_transcription.clone();
+                                let text_accumulator = Arc::clone(&accumulated_text_clone);
+                                let in_flight_mutex = Arc::clone(&transcription_in_flight);
 
-                            // Spawn transcription in background to avoid blocking recording
-                            thread::spawn(move || {
-                                // Build up full text from all segments
-                                let full_text = Arc::new(Mutex::new(String::new()));
-                                let full_text_clone = Arc::clone(&full_text);
+                                // Spawn transcription in background to avoid blocking recording
+                                thread::spawn(move || {
+                                    // Acquire the lock for the duration of transcription (RAII)
+                                    let _guard = in_flight_mutex.lock().unwrap();
 
-                                match transcriber_ref.transcribe_with_realtime_callback(
-                                    &audio_flat,
-                                    move |segment| {
-                                        // Skip [BLANK_AUDIO] segments
-                                        if segment.trim() == "[BLANK_AUDIO]" {
-                                            return;
+                                    // Build up full text from all segments
+                                    let full_text = Arc::new(Mutex::new(String::new()));
+                                    let full_text_clone = Arc::clone(&full_text);
+
+                                    match transcriber_ref.transcribe_with_realtime_callback(
+                                        &audio_flat,
+                                        move |segment| {
+                                            // Skip [BLANK_AUDIO] segments
+                                            if segment.trim() == "[BLANK_AUDIO]" {
+                                                return;
+                                            }
+                                            let mut text = full_text_clone.lock().unwrap();
+                                            if !text.is_empty() && !text.ends_with(' ') {
+                                                text.push(' ');
+                                            }
+                                            text.push_str(segment.trim());
+                                        },
+                                    ) {
+                                        Ok(_) => {
+                                            let complete_text = full_text.lock().unwrap().clone();
+                                            if !complete_text.is_empty() {
+                                                // Replace accumulated text with the complete transcription
+                                                *text_accumulator.lock().unwrap() =
+                                                    complete_text.clone();
+                                                tracing::info!(
+                                                    "Transcription complete: '{}'",
+                                                    complete_text
+                                                );
+                                                let _ = ui_tx_transcribe.send_blocking(
+                                                    UIMessage::SetTextPreview(complete_text),
+                                                );
+                                            }
                                         }
-                                        let mut text = full_text_clone.lock().unwrap();
-                                        if !text.is_empty() && !text.ends_with(' ') {
-                                            text.push(' ');
-                                        }
-                                        text.push_str(segment.trim());
-                                    },
-                                ) {
-                                    Ok(_) => {
-                                        let complete_text = full_text.lock().unwrap().clone();
-                                        if !complete_text.is_empty() {
-                                            // Replace accumulated text with the complete re-transcription
-                                            *text_accumulator.lock().unwrap() =
-                                                complete_text.clone();
-                                            tracing::info!(
-                                                "Complete transcription during pause: '{}'",
-                                                complete_text
-                                            );
-                                            let _ = ui_tx_transcribe.send_blocking(
-                                                UIMessage::SetTextPreview(complete_text),
-                                            );
+                                        Err(e) => {
+                                            tracing::warn!("Transcription failed: {}", e);
                                         }
                                     }
-                                    Err(e) => {
-                                        tracing::warn!(
-                                            "Continuous transcription during pause failed: {}",
-                                            e
-                                        );
-                                    }
-                                }
-                            });
+                                    // _guard is dropped here, releasing the lock automatically
+                                });
+                            } else {
+                                tracing::debug!("Transcription already in flight, skipping");
+                            }
                         }
 
                         if result.should_stop {
