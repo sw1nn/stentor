@@ -595,7 +595,7 @@ impl TranscriptionDialog {
                     .set_markup(&format!("<small>{}</small>", message));
                 self.level_bar.set_visible(true);
                 self.level_bar.set_value(level.min(0.1));
-                tracing::debug!("Level bar updated: {}", level);
+                tracing::trace!("Level bar updated: {}", level);
                 self.text_preview.set_visible(true);
                 self.scrolled.set_visible(false);
             }

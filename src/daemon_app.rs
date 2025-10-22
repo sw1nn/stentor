@@ -153,20 +153,26 @@ pub async fn run(
                             MultiSlotHandler::None => None,
                         };
 
+                        // Determine which output command to use based on handler type
+                        let output_command = match multi_slot_handler {
+                            MultiSlotHandler::Kitty => config_file_clone.kitty.output_command.clone(),
+                            MultiSlotHandler::None => config_clone.output_command.clone(),
+                        };
+
                         // Setup UI message receiver
                         let dialog_for_updates = dialog.clone();
                         let dialog_state_clone = Rc::clone(&current_dialog_clone);
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
-                        let config_for_auto_send = config_clone.clone();
+                        let output_command_for_auto_send = output_command.clone();
                         let handler_for_cleanup = handler.clone();
                         let kitty_window_ids: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
                         let kitty_window_ids_clone = Rc::clone(&kitty_window_ids);
                         let handler_for_close = handler.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
-                                tracing::debug!("UI message received: {:?}", msg);
+                                tracing::trace!("UI message received: {:?}", msg);
                                 use UIMessage::*;
                                 match msg {
                                     UpdateState(state, text, level) => {
@@ -192,21 +198,11 @@ pub async fn run(
                                     AutoSendText(text, dest_num) => {
                                         tracing::info!("Auto-sending text to destination {}: {}", dest_num, text);
 
-                                        // Select command based on destination
-                                        let cmd = if dest_num == 0 {
-                                            config_for_auto_send.output_command.as_ref()
+                                        // Use the single output command for all destinations
+                                        if let Some(ref cmd_str) = output_command_for_auto_send {
+                                            execute_output_command(cmd_str, &text, dest_num);
                                         } else {
-                                            match dest_num {
-                                                1 => config_for_auto_send.output_command_1.as_ref(),
-                                                2 => config_for_auto_send.output_command_2.as_ref(),
-                                                3 => config_for_auto_send.output_command_3.as_ref(),
-                                                4 => config_for_auto_send.output_command_4.as_ref(),
-                                                _ => None,
-                                            }
-                                        };
-
-                                        if let Some(cmd_str) = cmd {
-                                            execute_output_command(cmd_str, &text);
+                                            tracing::warn!("No output command configured for sending text");
                                         }
 
                                         // Cleanup handler if present
@@ -268,27 +264,16 @@ pub async fn run(
                             }
                         });
 
-                        let config_clone2 = config_clone.clone();
+                        let output_command_for_send = output_command.clone();
                         let ui_tx_for_close = ui_tx.clone();
                         dialog.set_on_send_text(move |text, dest_num| {
                             tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
-                            // If dest_num is 0 (Ctrl+Enter), use default output command
-                            // If dest_num is 1-4 (Ctrl+1-4), use corresponding output command
-                            let cmd = if dest_num == 0 {
-                                config_clone2.output_command.as_ref()
+                            // Use the single output command for all destinations
+                            if let Some(ref cmd_str) = output_command_for_send {
+                                execute_output_command(cmd_str, &text, dest_num);
                             } else {
-                                match dest_num {
-                                    1 => config_clone2.output_command_1.as_ref(),
-                                    2 => config_clone2.output_command_2.as_ref(),
-                                    3 => config_clone2.output_command_3.as_ref(),
-                                    4 => config_clone2.output_command_4.as_ref(),
-                                    _ => None,
-                                }
-                            };
-
-                            if let Some(cmd_str) = cmd {
-                                execute_output_command(cmd_str, &text);
+                                tracing::warn!("No output command configured for sending text");
                             }
 
                             // Close dialog

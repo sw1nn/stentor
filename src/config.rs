@@ -20,6 +20,9 @@ pub struct KittyConfig {
 
     #[serde(default = "default_kitty_base_background", alias = "base-background-color")]
     pub base_background_color: String,
+
+    #[serde(default, alias = "output-command")]
+    pub output_command: Option<String>,
 }
 
 impl Default for KittyConfig {
@@ -27,6 +30,7 @@ impl Default for KittyConfig {
         Self {
             background_color_cmd: None,
             base_background_color: default_kitty_base_background(),
+            output_command: None,
         }
     }
 }
@@ -73,18 +77,6 @@ pub struct Config {
     #[serde(default, alias = "output-command")]
     pub output_command: Option<String>,
 
-    #[serde(default, alias = "output-command-1")]
-    pub output_command_1: Option<String>,
-
-    #[serde(default, alias = "output-command-2")]
-    pub output_command_2: Option<String>,
-
-    #[serde(default, alias = "output-command-3")]
-    pub output_command_3: Option<String>,
-
-    #[serde(default, alias = "output-command-4")]
-    pub output_command_4: Option<String>,
-
     #[serde(default = "default_socket_name", alias = "socket-name")]
     pub socket_name: String,
 }
@@ -98,10 +90,6 @@ impl Default for Config {
             silence_threshold: default_silence_threshold(),
             min_speech_duration: default_min_speech_duration(),
             output_command: None,
-            output_command_1: None,
-            output_command_2: None,
-            output_command_3: None,
-            output_command_4: None,
             socket_name: default_socket_name(),
         }
     }

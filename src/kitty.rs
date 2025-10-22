@@ -79,14 +79,14 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => {
-                tracing::debug!("Read {} bytes", n);
+                tracing::trace!("Read {} bytes", n);
                 resp.extend_from_slice(&buffer[..n]);
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                tracing::debug!("Read timeout - assuming no more data");
+                tracing::trace!("Read timeout - assuming no more data");
                 break;
             }
             Err(e) => {
@@ -97,12 +97,12 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
 
     // Parse and check response
     let response_str = String::from_utf8_lossy(&resp);
-    tracing::debug!("Received response: {:?}", response_str);
+    tracing::trace!("Received response: {:?}", response_str);
     if let Some(start) = response_str.find("@kitty-cmd") {
         let json_start = start + 10;
         if let Some(end) = response_str[json_start..].find("\x1b\\") {
             let json_str = &response_str[json_start..json_start + end];
-            tracing::debug!("Response JSON: {}", json_str);
+            tracing::trace!("Response JSON: {}", json_str);
             let response: Value =
                 serde_json::from_str(json_str).context("Failed to parse Kitty response")?;
 
@@ -143,14 +143,14 @@ pub fn list_kitty_windows() -> Result<Value> {
         match stream.read(&mut buffer) {
             Ok(0) => break,
             Ok(n) => {
-                tracing::debug!("Read {} bytes", n);
+                tracing::trace!("Read {} bytes", n);
                 resp.extend_from_slice(&buffer[..n]);
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
                     || e.kind() == std::io::ErrorKind::TimedOut =>
             {
-                tracing::debug!("Read timeout - assuming no more data");
+                tracing::trace!("Read timeout - assuming no more data");
                 break;
             }
             Err(e) => {
@@ -159,14 +159,14 @@ pub fn list_kitty_windows() -> Result<Value> {
         }
     }
 
-    tracing::debug!("Total received {} bytes", resp.len());
+    tracing::trace!("Total received {} bytes", resp.len());
     let response_str = String::from_utf8_lossy(&resp);
 
     if let Some(start) = response_str.find("@kitty-cmd") {
         let json_start = start + 10;
         if let Some(end) = response_str[json_start..].find("\x1b\\") {
             let json_str = &response_str[json_start..json_start + end];
-            tracing::debug!("Response JSON length: {} bytes", json_str.len());
+            tracing::trace!("Response JSON length: {} bytes", json_str.len());
 
             let response: Value =
                 serde_json::from_str(json_str).context("Failed to parse Kitty response")?;
@@ -195,7 +195,7 @@ pub fn list_kitty_windows() -> Result<Value> {
 }
 
 pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
-    let mut stentor_windows = Vec::new();
+    let mut stentor_windows: Vec<(usize, ClaudeWindow)> = Vec::new();
 
     if let Some(os_windows) = data.as_array() {
         tracing::debug!("Scanning {} OS window(s)", os_windows.len());
@@ -204,18 +204,22 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                 for tab in tabs {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
-                            // Check if window has STENTOR_SLOT env var
-                            let has_stentor_slot = if let Some(user_vars) = window.get("env") {
-                                user_vars
-                                    .as_object()
-                                    .map_or(false, |vars| vars.keys().any(|k| k == "STENTOR_SLOT"))
+                            // Check if window has STENTOR_SLOT env var and extract its value
+                            let slot_number = if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
+                                if let Some(slot_str) = env.get("STENTOR_SLOT").and_then(|v| v.as_str()) {
+                                    slot_str.parse::<usize>().ok()
+                                } else {
+                                    None
+                                }
                             } else {
-                                false
+                                None
                             };
 
-                            if !has_stentor_slot {
+                            if slot_number.is_none() {
                                 continue;
                             }
+
+                            let slot_num = slot_number.unwrap();
 
                             // Window has STENTOR_SLOT - include it
                             if let Some(id) = window.get("id").and_then(|i| i.as_u64()) {
@@ -225,11 +229,12 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                                     .unwrap_or("unknown")
                                     .to_string();
                                 tracing::debug!(
-                                    "Found STENTOR_SLOT window: id={}, cwd={}",
+                                    "Found STENTOR_SLOT window: id={}, cwd={}, slot={}",
                                     id,
-                                    cwd
+                                    cwd,
+                                    slot_num
                                 );
-                                stentor_windows.push(ClaudeWindow { id, cwd });
+                                stentor_windows.push((slot_num, ClaudeWindow { id, cwd }));
                             }
                         }
                     }
@@ -238,8 +243,13 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
         }
     }
 
+    // Sort by slot number
+    stentor_windows.sort_by_key(|(slot_num, _)| *slot_num);
+
     tracing::debug!("Total STENTOR windows found: {}", stentor_windows.len());
-    stentor_windows
+
+    // Return just the ClaudeWindow structs, now sorted by slot number
+    stentor_windows.into_iter().map(|(_, window)| window).collect()
 }
 
 /// Find the next available STENTOR_SLOT (1-8)

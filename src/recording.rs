@@ -115,11 +115,11 @@ pub fn start_recording_session(
         match chunk_rx.recv_timeout(std::time::Duration::from_millis(100)) {
             Ok(chunk) => {
                 let rms = chunk.rms;
-                tracing::debug!("Received audio chunk: RMS = {}", rms);
+                tracing::trace!("Received audio chunk: RMS = {}", rms);
 
                 // Process through VAD
                 let result = vad.process_chunk(rms, vad_state, silence_chunks, speech_chunks);
-                tracing::debug!(
+                tracing::trace!(
                     "VAD: state transition {:?} -> {:?}, silence_chunks={}, should_stop={}",
                     vad_state,
                     result.state,
@@ -388,14 +388,15 @@ pub fn start_recording_session(
     Ok(())
 }
 
-pub fn execute_output_command(command_template: &str, text: &str) {
-    tracing::info!(transcription = text, command_template, "Executing command");
+pub fn execute_output_command(command_template: &str, text: &str, slot_num: usize) {
+    tracing::info!(transcription = text, slot_num, command_template, "Executing command");
 
-    // Pass transcription via environment variable to prevent shell injection
+    // Pass transcription and slot number via environment variables to prevent shell injection
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command_template)
-        .env("TRANSCRIPTION", text);
+        .env("TRANSCRIPTION", text)
+        .env("SLOT", slot_num.to_string());
 
     match cmd.status() {
         Ok(status) => {
