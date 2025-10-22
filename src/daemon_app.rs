@@ -45,6 +45,21 @@ pub async fn run(
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 
+    // Application state (create RefCell before startup handler)
+    // Use Rc<RefCell<>> for GTK widgets since all GTK operations happen on the main thread
+    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> =
+        Rc::new(RefCell::new(None));
+
+    // Create dialog in startup handler to avoid GTK warning
+    let current_dialog_for_startup = Rc::clone(&current_dialog);
+    app.connect_startup(move |app| {
+        // Create the dialog once at startup (hidden)
+        let dialog = TranscriptionDialog::new(app);
+        dialog.hide();
+        *current_dialog_for_startup.borrow_mut() = Some(dialog);
+        tracing::info!("Created persistent dialog (hidden)");
+    });
+
     // Add a dummy activate handler to suppress GTK warning
     app.connect_activate(|_| {
         // This daemon is socket-driven, not activation-driven
@@ -53,16 +68,6 @@ pub async fn run(
 
     // Hold the application to keep it running even when no windows are shown
     let _hold_guard = app.hold();
-
-    // Create the dialog once at startup (hidden)
-    let dialog = TranscriptionDialog::new(&app);
-    dialog.hide();
-    tracing::info!("Created persistent dialog (hidden)");
-
-    // Application state
-    // Use Rc<RefCell<>> for GTK widgets since all GTK operations happen on the main thread
-    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> =
-        Rc::new(RefCell::new(Some(dialog)));
     let current_ui_tx: Rc<RefCell<Option<Sender<UIMessage>>>> = Rc::new(RefCell::new(None));
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
