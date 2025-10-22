@@ -181,6 +181,7 @@ pub async fn run(
                         let handler_for_cleanup = handler.clone();
                         let kitty_window_ids: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
                         let kitty_window_ids_clone = Rc::clone(&kitty_window_ids);
+                        let kitty_window_ids_for_send_callback = Rc::clone(&kitty_window_ids);
                         let handler_for_close = handler.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
@@ -302,18 +303,37 @@ pub async fn run(
 
                             let output_command_for_send = output_command.clone();
                             let ui_tx_for_close = ui_tx.clone();
+                            let handler_for_send = handler.clone();
+                            let kitty_window_ids_for_send = kitty_window_ids_for_send_callback.borrow().clone();
                             dialog.set_on_send_text(move |text, dest_num| {
                                 tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
-                                // Use the single output command for all destinations
-                                if let Some(ref cmd_str) = output_command_for_send {
-                                    execute_output_command(cmd_str, &text, dest_num);
-                                } else {
-                                    tracing::warn!("No output command configured for sending text");
-                                }
+                                // Close dialog immediately for better UX
+                                tracing::info!("Closing dialog immediately (output command continues in background)");
+                                let _ = ui_tx_for_close.send_blocking(UIMessage::CloseImmediately);
 
-                                // Close dialog
-                                let _ = ui_tx_for_close.send_blocking(UIMessage::Close);
+                                // Execute output command and cleanup in background
+                                let cmd_str = output_command_for_send.clone();
+                                let handler = handler_for_send.clone();
+                                let window_ids = kitty_window_ids_for_send.clone();
+                                let ui_tx_close = ui_tx_for_close.clone();
+                                std::thread::spawn(move || {
+                                    if let Some(ref cmd) = cmd_str {
+                                        execute_output_command(cmd, &text, dest_num);
+                                    } else {
+                                        tracing::warn!("No output command configured for sending text");
+                                    }
+
+                                    // Cleanup handler in background
+                                    if let Some(ref h) = handler {
+                                        if let Err(e) = h.cleanup(window_ids) {
+                                            tracing::error!("Handler cleanup failed: {}", e);
+                                        }
+                                    }
+
+                                    // Send final Close after background processing
+                                    let _ = ui_tx_close.send_blocking(UIMessage::Close);
+                                });
                             });
 
                             let ui_tx_for_cancel = ui_tx.clone();
