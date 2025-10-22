@@ -214,15 +214,15 @@ pub fn start_recording_session(
                                         },
                                     ) {
                                         Ok(_) => {
-                                            let complete_text = full_text.lock().unwrap().clone();
+                                            // Take ownership of text to avoid cloning twice
+                                            let complete_text = std::mem::take(&mut *full_text.lock().unwrap());
                                             if !complete_text.is_empty() {
-                                                // Replace accumulated text with the complete transcription
-                                                *text_accumulator.lock().unwrap() =
-                                                    complete_text.clone();
                                                 tracing::info!(
                                                     "Transcription complete: '{}'",
                                                     complete_text
                                                 );
+                                                // Clone once for text_accumulator, move to UI message
+                                                *text_accumulator.lock().unwrap() = complete_text.clone();
                                                 let _ = ui_tx_transcribe.send_blocking(
                                                     UIMessage::SetTextPreview(complete_text),
                                                 );
