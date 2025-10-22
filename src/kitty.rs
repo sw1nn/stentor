@@ -206,15 +206,18 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
                             // Check if window has STENTOR_SLOT env var and extract its value
-                            let slot_number = if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
-                                if let Some(slot_str) = env.get("STENTOR_SLOT").and_then(|v| v.as_str()) {
-                                    slot_str.parse::<usize>().ok()
+                            let slot_number =
+                                if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
+                                    if let Some(slot_str) =
+                                        env.get("STENTOR_SLOT").and_then(|v| v.as_str())
+                                    {
+                                        slot_str.parse::<usize>().ok()
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
-                                }
-                            } else {
-                                None
-                            };
+                                };
 
                             if slot_number.is_none() {
                                 continue;
@@ -235,7 +238,8 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                                     cwd,
                                     slot_num
                                 );
-                                stentor_windows.push((slot_num, ClaudeWindow { id, cwd, slot_num }));
+                                stentor_windows
+                                    .push((slot_num, ClaudeWindow { id, cwd, slot_num }));
                             }
                         }
                     }
@@ -248,7 +252,10 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
 
     // Return ClaudeWindow structs in discovery order (not sorted)
     // This ensures Alt+1, Alt+2, Alt+3, etc. map to the 1st, 2nd, 3rd discovered windows
-    stentor_windows.into_iter().map(|(_, window)| window).collect()
+    stentor_windows
+        .into_iter()
+        .map(|(_, window)| window)
+        .collect()
 }
 
 /// Find the next available STENTOR_SLOT (1-8)
@@ -266,7 +273,9 @@ pub fn find_available_slot() -> Result<Option<usize>> {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
                             if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
-                                if let Some(slot_str) = env.get("STENTOR_SLOT").and_then(|v| v.as_str()) {
+                                if let Some(slot_str) =
+                                    env.get("STENTOR_SLOT").and_then(|v| v.as_str())
+                                {
                                     if let Ok(slot_num) = slot_str.parse::<usize>() {
                                         if slot_num >= 1 && slot_num <= 8 {
                                             occupied_slots.insert(slot_num);
@@ -316,9 +325,14 @@ pub fn launch_with_slot(slot: usize, command: &[String]) -> Result<()> {
         cmd.arg(arg);
     }
 
-    tracing::info!("Launching kitty window in slot {} with command: {:?}", slot, command);
+    tracing::info!(
+        "Launching kitty window in slot {} with command: {:?}",
+        slot,
+        command
+    );
 
-    let output = cmd.output()
+    let output = cmd
+        .output()
         .context("Failed to execute kitty @ launch command")?;
 
     if !output.status.success() {
@@ -602,7 +616,10 @@ impl KittyMultiSlotHandler {
         }
 
         // Fall back to configured base background color
-        tracing::info!("Using configured background color: {}", self.config.base_background_color);
+        tracing::info!(
+            "Using configured background color: {}",
+            self.config.base_background_color
+        );
         self.config.base_background_color.clone()
     }
 }
@@ -627,7 +644,10 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
             match list_kitty_windows() {
                 Ok(data) => {
                     let stentor_windows = find_stentor_windows(&data);
-                    tracing::info!("Background: Found {} STENTOR windows", stentor_windows.len());
+                    tracing::info!(
+                        "Background: Found {} STENTOR windows",
+                        stentor_windows.len()
+                    );
 
                     let palette = Palette::new(&base_bg);
                     let mut destinations = Vec::new();
@@ -640,17 +660,32 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
                             // Set background color and env var in one batched call
                             let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
-                            if let Err(e) = set_window_color_and_env(color_hex, &env_var_name, "1", window.id) {
-                                tracing::warn!("Failed to set color and env var for window {}: {}", window.id, e);
+                            if let Err(e) =
+                                set_window_color_and_env(color_hex, &env_var_name, "1", window.id)
+                            {
+                                tracing::warn!(
+                                    "Failed to set color and env var for window {}: {}",
+                                    window.id,
+                                    e
+                                );
                             } else {
-                                tracing::debug!("Set color {} and env var {} for window {}", color_hex, env_var_name, window.id);
+                                tracing::debug!(
+                                    "Set color {} and env var {} for window {}",
+                                    color_hex,
+                                    env_var_name,
+                                    window.id
+                                );
                                 modified_window_ids.push(window.id);
                             }
 
                             // Create destination slot with label and send immediately
                             // Parse the path to check if it's a worktree
                             let label = parse_worktree_label(&window.cwd);
-                            destinations.push(DestinationSlot::with_label(slot_num, label, color_hex.to_string()));
+                            destinations.push(DestinationSlot::with_label(
+                                slot_num,
+                                label,
+                                color_hex.to_string(),
+                            ));
 
                             // Update UI incrementally - send current state after each window is processed
                             let mut current_destinations = destinations.clone();
@@ -658,18 +693,27 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                             for j in (i + 1)..8 {
                                 current_destinations.push(DestinationSlot::inactive(j + 1));
                             }
-                            tracing::debug!("Background: Sending incremental update for slot {}", slot_num);
-                            let _ = ui_tx_for_kitty.send_blocking(HandlerUIMessage::SetDestinations(current_destinations));
+                            tracing::debug!(
+                                "Background: Sending incremental update for slot {}",
+                                slot_num
+                            );
+                            let _ = ui_tx_for_kitty.send_blocking(
+                                HandlerUIMessage::SetDestinations(current_destinations),
+                            );
                         }
                     }
 
                     // Store window IDs for cleanup
                     if !modified_window_ids.is_empty() {
-                        let _ = ui_tx_for_kitty.send_blocking(HandlerUIMessage::StoreWindowIds(modified_window_ids));
+                        let _ = ui_tx_for_kitty
+                            .send_blocking(HandlerUIMessage::StoreWindowIds(modified_window_ids));
                     }
 
                     // If no windows were found, the initial inactive slots are already showing
-                    tracing::info!("Background: Finished processing {} STENTOR windows", stentor_windows.len());
+                    tracing::info!(
+                        "Background: Finished processing {} STENTOR windows",
+                        stentor_windows.len()
+                    );
                 }
                 Err(e) => {
                     tracing::warn!("Background: Failed to list Kitty windows: {}", e);
@@ -687,11 +731,19 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         }
 
         let background_color = self.get_background_color();
-        tracing::info!("Resetting background color for {} Kitty windows to {}", window_ids.len(), background_color);
+        tracing::info!(
+            "Resetting background color for {} Kitty windows to {}",
+            window_ids.len(),
+            background_color
+        );
 
         for window_id in window_ids {
             if let Err(e) = set_background_color(&background_color, window_id) {
-                tracing::warn!("Failed to reset background color for window {}: {}", window_id, e);
+                tracing::warn!(
+                    "Failed to reset background color for window {}: {}",
+                    window_id,
+                    e
+                );
             } else {
                 tracing::debug!("Reset background color for window {}", window_id);
             }

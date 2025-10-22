@@ -18,7 +18,10 @@ pub struct KittyConfig {
     #[serde(default, alias = "background-color-cmd")]
     pub background_color_cmd: Option<String>,
 
-    #[serde(default = "default_kitty_base_background", alias = "base-background-color")]
+    #[serde(
+        default = "default_kitty_base_background",
+        alias = "base-background-color"
+    )]
     pub base_background_color: String,
 
     #[serde(default, alias = "output-command")]

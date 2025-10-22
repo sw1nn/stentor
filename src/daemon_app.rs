@@ -16,7 +16,7 @@ use crate::daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler as MultiSlotHandlerTrait};
-use crate::recording::{execute_output_command, start_recording_session, UIMessage};
+use crate::recording::{UIMessage, execute_output_command, start_recording_session};
 use crate::transcription::Transcriber;
 
 pub async fn run(
@@ -54,9 +54,15 @@ pub async fn run(
     // Hold the application to keep it running even when no windows are shown
     let _hold_guard = app.hold();
 
+    // Create the dialog once at startup (hidden)
+    let dialog = TranscriptionDialog::new(&app);
+    dialog.hide();
+    tracing::info!("Created persistent dialog (hidden)");
+
     // Application state
     // Use Rc<RefCell<>> for GTK widgets since all GTK operations happen on the main thread
-    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> = Rc::new(RefCell::new(None));
+    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> =
+        Rc::new(RefCell::new(Some(dialog)));
     let current_ui_tx: Rc<RefCell<Option<Sender<UIMessage>>>> = Rc::new(RefCell::new(None));
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
@@ -100,13 +106,17 @@ pub async fn run(
                         continue;
                     }
 
-                    let mut dialog_ref = current_dialog_clone.borrow_mut();
+                    // Reset dialog state for new session and setup for recording
+                    {
+                        let mut dialog_ref = current_dialog_clone.borrow_mut();
+                        let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
+                        dialog.reset();
+                    }
 
-                    if dialog_ref.is_none() {
-                        // Create new dialog
-                        let mut dialog = TranscriptionDialog::new(&app_clone);
+                    // Get dialog again for setup (immutable borrow for cloning)
+                    let mut dialog = current_dialog_clone.borrow().as_ref().expect("Dialog should always exist").clone();
 
-                        // Get source info
+                    // Get source info
                         let source_name = match AudioRecorder::new(16000, source.clone()) {
                             Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
                             Err(_) => "Default".to_string(),
@@ -161,7 +171,6 @@ pub async fn run(
 
                         // Setup UI message receiver
                         let dialog_for_updates = dialog.clone();
-                        let dialog_state_clone = Rc::clone(&current_dialog_clone);
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
@@ -231,17 +240,18 @@ pub async fn run(
                                             tracing::info!("Background processing complete");
                                         });
 
-                                        // Close dialog now that background processing is started
-                                        tracing::info!("Closing dialog (background processing started)");
-                                        dialog_for_updates.close();
-                                        *dialog_state_clone.borrow_mut() = None;
+                                        // Hide dialog now that background processing is started
+                                        // Don't close/destroy - dialog will be reused for next session
+                                        tracing::info!("Hiding dialog (background processing started)");
+                                        dialog_for_updates.hide();
+                                        // Clear session state (dialog persists for reuse)
                                         *ui_tx_state_clone.borrow_mut() = None;
                                         // Clear recording active flag
                                         recording_active_for_ui.store(false, Ordering::Release);
                                         break;
                                     }
                                     Close => {
-                                        tracing::info!("Closing dialog and cleaning up state");
+                                        tracing::info!("Hiding dialog and cleaning up state");
 
                                         // Stop recording thread if it's still running
                                         let stop_tx_lock = stop_tx_for_cleanup.lock().unwrap();
@@ -259,9 +269,9 @@ pub async fn run(
                                             }
                                         }
 
-                                        dialog_for_updates.close();
-                                        // Clean up state
-                                        *dialog_state_clone.borrow_mut() = None;
+                                        // Hide dialog but don't destroy - it will be reused for next session
+                                        dialog_for_updates.hide();
+                                        // Clear session state (dialog persists for reuse)
                                         *ui_tx_state_clone.borrow_mut() = None;
                                         // Clear recording active flag
                                         recording_active_for_ui.store(false, Ordering::Release);
@@ -370,14 +380,6 @@ pub async fn run(
                             recording_active_for_thread.store(false, Ordering::Release);
                             tracing::info!("Recording thread finished, cleared recording_active flag");
                         });
-
-                        *dialog_ref = Some(dialog);
-                    } else {
-                        // Dialog already exists, bring to front
-                        if let Some(ref dialog) = *dialog_ref {
-                            dialog.present();
-                        }
-                    }
                 }
                 Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription

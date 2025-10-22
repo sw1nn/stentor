@@ -148,16 +148,14 @@ pub fn start_recording_session(
                             tracing::info!("Speech detected! Transcription will run on pause...");
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
-                                "Recording... (pause or press Escape to transcribe)"
-                                    .to_string(),
+                                "Recording... (pause or press Escape to transcribe)".to_string(),
                                 rms as f64,
                             ));
                         } else {
                             // Update UI with audio level
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
-                                "Recording... (pause or press Escape to transcribe)"
-                                    .to_string(),
+                                "Recording... (pause or press Escape to transcribe)".to_string(),
                                 rms as f64,
                             ));
                         }
@@ -301,7 +299,11 @@ pub fn start_recording_session(
                     if !cleaned.is_empty() {
                         // Auto-send or show for review
                         if let Some(slot) = auto_slot {
-                            tracing::info!("Auto-sending to slot {} with text: '{}'", slot, cleaned);
+                            tracing::info!(
+                                "Auto-sending to slot {} with text: '{}'",
+                                slot,
+                                cleaned
+                            );
                             let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned, slot));
                             tracing::info!("AutoSendText message sent");
                         } else {
@@ -337,7 +339,11 @@ pub fn start_recording_session(
 
     // Auto-send or show final result in dialog for review
     if let Some(slot) = auto_slot {
-        tracing::info!("Auto-sending final_text to slot {} with text: '{}'", slot, final_text);
+        tracing::info!(
+            "Auto-sending final_text to slot {} with text: '{}'",
+            slot,
+            final_text
+        );
         let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text, slot));
         tracing::info!("AutoSendText message sent (from accumulated text)");
     } else {
@@ -354,7 +360,12 @@ pub fn start_recording_session(
 }
 
 pub fn execute_output_command(command_template: &str, text: &str, slot_num: usize) {
-    tracing::info!(transcription = text, slot_num, command_template, "Executing command");
+    tracing::info!(
+        transcription = text,
+        slot_num,
+        command_template,
+        "Executing command"
+    );
 
     // Pass transcription and slot number via environment variables to prevent shell injection
     let mut cmd = std::process::Command::new("sh");

@@ -30,7 +30,7 @@ impl DestinationSlot {
     pub fn inactive(slot_num: usize) -> Self {
         Self {
             slot_num,
-            label: String::new(),                 // Empty label for inactive slots
+            label: String::new(), // Empty label for inactive slots
             color_hex: "transparent".to_string(), // Transparent background for inactive slots
         }
     }
@@ -236,7 +236,10 @@ impl TranscriptionDialog {
 
                 // Icon label (takes up full height)
                 let icon_label = Label::new(Some(&slot_unicode_char(slot_num).to_string()));
-                icon_label.set_markup(&format!("<span size='large'>{}</span>", slot_unicode_char(slot_num)));
+                icon_label.set_markup(&format!(
+                    "<span size='large'>{}</span>",
+                    slot_unicode_char(slot_num)
+                ));
                 icon_label.set_valign(gtk4::Align::Center);
                 hbox.append(&icon_label);
 
@@ -256,7 +259,10 @@ impl TranscriptionDialog {
                     // Second line (branch name) - dimmed color
                     if let Some(line2_text) = lines.get(1) {
                         let line2 = Label::new(Some(line2_text));
-                        line2.set_markup(&format!("<small><span foreground='#888888'>{}</span></small>", line2_text));
+                        line2.set_markup(&format!(
+                            "<small><span foreground='#888888'>{}</span></small>",
+                            line2_text
+                        ));
                         line2.set_xalign(0.0); // Left align
                         vbox.append(&line2);
                     }
@@ -320,7 +326,11 @@ impl TranscriptionDialog {
                     }
                 };
 
-                tracing::info!("Destination button {} clicked (slot {})", button_index, slot_num);
+                tracing::info!(
+                    "Destination button {} clicked (slot {})",
+                    button_index,
+                    slot_num
+                );
                 let current_state = *state.lock().unwrap();
                 use TranscriptionState::*;
                 match current_state {
@@ -480,7 +490,11 @@ impl TranscriptionDialog {
                         if let Some(dest) = dests.get(idx) {
                             Some(dest.slot_num)
                         } else {
-                            tracing::warn!("Alt+{} pressed but no destination at position {}", idx + 1, idx);
+                            tracing::warn!(
+                                "Alt+{} pressed but no destination at position {}",
+                                idx + 1,
+                                idx
+                            );
                             None
                         }
                     };
@@ -597,7 +611,11 @@ impl TranscriptionDialog {
                         if let Some(dest) = dests.get(idx) {
                             Some(dest.slot_num)
                         } else {
-                            tracing::warn!("Alt+{} pressed in text view but no destination at position {}", idx + 1, idx);
+                            tracing::warn!(
+                                "Alt+{} pressed in text view but no destination at position {}",
+                                idx + 1,
+                                idx
+                            );
                             None
                         }
                     };
@@ -762,6 +780,31 @@ impl TranscriptionDialog {
 
     pub fn hide(&self) {
         self.window.set_visible(false);
+    }
+
+    pub fn reset(&self) {
+        tracing::info!("Resetting dialog state");
+
+        // Reset transcription state
+        *self.state.lock().unwrap() = TranscriptionState::Idle;
+        *self.destinations.lock().unwrap() = Vec::new();
+
+        // Clear text content
+        self.text_view.buffer().set_text("");
+        self.text_preview.set_text("");
+
+        // Reset UI elements to initial state
+        self.spinner.stop();
+        self.status_label
+            .set_markup("<small>Waiting for speech...</small>");
+        self.level_bar.set_value(0.0);
+        self.level_bar.set_visible(true);
+        self.text_preview.set_visible(false);
+        self.scrolled.set_visible(false);
+        self.destination_box.set_visible(false);
+
+        // Reset mic label
+        self.mic_label.set_text("");
     }
 
     pub fn close(&self) {

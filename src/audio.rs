@@ -478,9 +478,7 @@ mod tests {
     #[test]
     fn test_list_sources() {
         let mut introspector = PulseIntrospector::new().expect("Failed to create introspector");
-        let sources = introspector
-            .list_sources()
-            .expect("Failed to list sources");
+        let sources = introspector.list_sources().expect("Failed to list sources");
         assert!(sources.is_empty() || !sources.is_empty());
     }
 }

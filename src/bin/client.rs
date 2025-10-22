@@ -230,20 +230,20 @@ fn launch_command(command: &[String]) -> Result<()> {
     use stentor::kitty;
 
     // Find next available slot
-    let slot = kitty::find_available_slot()
-        .context("Failed to discover available slots")?;
+    let slot = kitty::find_available_slot().context("Failed to discover available slots")?;
 
     let slot = match slot {
         Some(s) => s,
         None => {
-            eprintln!("ERROR: All slots (1-8) are occupied. Close a stentor window to free a slot.");
+            eprintln!(
+                "ERROR: All slots (1-8) are occupied. Close a stentor window to free a slot."
+            );
             std::process::exit(1);
         }
     };
 
     // Launch window with the slot
-    kitty::launch_with_slot(slot, command)
-        .context("Failed to launch kitty window")?;
+    kitty::launch_with_slot(slot, command).context("Failed to launch kitty window")?;
 
     println!("Launched window in slot {}", slot);
     Ok(())
