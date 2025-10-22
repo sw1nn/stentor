@@ -106,22 +106,19 @@ pub async fn run(
                         continue;
                     }
 
-                    // Reset dialog state for new session and setup for recording
+                    // Reset dialog state and set source info before cloning
                     {
                         let mut dialog_ref = current_dialog_clone.borrow_mut();
                         let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
                         dialog.reset();
-                    }
 
-                    // Get dialog again for setup (immutable borrow for cloning)
-                    let mut dialog = current_dialog_clone.borrow().as_ref().expect("Dialog should always exist").clone();
-
-                    // Get source info
+                        // Get source info and set it while we have mutable borrow
                         let source_name = match AudioRecorder::new(16000, source.clone()) {
                             Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
                             Err(_) => "Default".to_string(),
                         };
                         dialog.set_source_info(&source_name);
+                    }
 
                         // Create UI update channel with backpressure
                         // Bounded to prevent OOM if UI thread blocks
@@ -170,7 +167,8 @@ pub async fn run(
                         };
 
                         // Setup UI message receiver
-                        let dialog_for_updates = dialog.clone();
+                        // Clone dialog for async closure (needs 'static lifetime)
+                        let dialog_for_updates = current_dialog_clone.borrow().as_ref().expect("Dialog should always exist").clone();
                         let ui_tx_state_clone = Rc::clone(&current_ui_tx_clone);
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
@@ -282,69 +280,75 @@ pub async fn run(
                             }
                         });
 
-                        // Setup callbacks
-                        let stop_tx_clone = Arc::clone(&current_stop_tx_clone);
-                        dialog.set_on_manual_stop(move || {
-                            tracing::info!("Manual stop requested");
-                            let stop_tx_lock = stop_tx_clone.lock().unwrap();
-                            if let Some(ref tx) = *stop_tx_lock {
-                                let _ = tx.send(RecordingCommand::Stop);
-                            }
-                        });
+                        // Setup callbacks and present dialog
+                        // Borrow dialog mutably for callback setup
+                        {
+                            let mut dialog_ref = current_dialog_clone.borrow_mut();
+                            let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
 
-                        let output_command_for_send = output_command.clone();
-                        let ui_tx_for_close = ui_tx.clone();
-                        dialog.set_on_send_text(move |text, dest_num| {
-                            tracing::info!("Sending text to destination {}: {}", dest_num, text);
+                            let stop_tx_clone = Arc::clone(&current_stop_tx_clone);
+                            dialog.set_on_manual_stop(move || {
+                                tracing::info!("Manual stop requested");
+                                let stop_tx_lock = stop_tx_clone.lock().unwrap();
+                                if let Some(ref tx) = *stop_tx_lock {
+                                    let _ = tx.send(RecordingCommand::Stop);
+                                }
+                            });
 
-                            // Use the single output command for all destinations
-                            if let Some(ref cmd_str) = output_command_for_send {
-                                execute_output_command(cmd_str, &text, dest_num);
-                            } else {
-                                tracing::warn!("No output command configured for sending text");
-                            }
+                            let output_command_for_send = output_command.clone();
+                            let ui_tx_for_close = ui_tx.clone();
+                            dialog.set_on_send_text(move |text, dest_num| {
+                                tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
-                            // Close dialog
-                            let _ = ui_tx_for_close.send_blocking(UIMessage::Close);
-                        });
+                                // Use the single output command for all destinations
+                                if let Some(ref cmd_str) = output_command_for_send {
+                                    execute_output_command(cmd_str, &text, dest_num);
+                                } else {
+                                    tracing::warn!("No output command configured for sending text");
+                                }
 
-                        let ui_tx_for_cancel = ui_tx.clone();
-                        dialog.set_on_cancel(move || {
-                            tracing::info!("Cancelled");
-                            let _ = ui_tx_for_cancel.send_blocking(UIMessage::Close);
-                        });
+                                // Close dialog
+                                let _ = ui_tx_for_close.send_blocking(UIMessage::Close);
+                            });
 
-                        let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);
-                        let auto_send_clone2 = Arc::clone(&auto_send_slot_clone);
-                        let ui_tx_for_stop_and_send = ui_tx.clone();
-                        dialog.set_on_stop_and_send(move |dest_num| {
-                            tracing::info!("Stop and send to slot {} requested", dest_num);
+                            let ui_tx_for_cancel = ui_tx.clone();
+                            dialog.set_on_cancel(move || {
+                                tracing::info!("Cancelled");
+                                let _ = ui_tx_for_cancel.send_blocking(UIMessage::Close);
+                            });
 
-                            // Close dialog immediately for better UX (cleanup happens after transcription)
-                            tracing::info!("Closing dialog immediately (transcription continues in background)");
-                            let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
+                            let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);
+                            let auto_send_clone2 = Arc::clone(&auto_send_slot_clone);
+                            let ui_tx_for_stop_and_send = ui_tx.clone();
+                            dialog.set_on_stop_and_send(move |dest_num| {
+                                tracing::info!("Stop and send to slot {} requested", dest_num);
 
-                            // Store the destination slot for auto-send
-                            auto_send_clone2.store(dest_num as u8, Ordering::Release);
+                                // Close dialog immediately for better UX (cleanup happens after transcription)
+                                tracing::info!("Closing dialog immediately (transcription continues in background)");
+                                let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
-                            // Trigger stop to finalize transcription (continues in background)
-                            let stop_tx_lock = stop_tx_clone2.lock().unwrap();
-                            if let Some(ref tx) = *stop_tx_lock {
-                                let _ = tx.send(RecordingCommand::Stop);
-                            }
-                        });
+                                // Store the destination slot for auto-send
+                                auto_send_clone2.store(dest_num as u8, Ordering::Release);
 
-                        dialog.setup_key_handlers();
-                        dialog.setup_destination_click_handlers();
+                                // Trigger stop to finalize transcription (continues in background)
+                                let stop_tx_lock = stop_tx_clone2.lock().unwrap();
+                                if let Some(ref tx) = *stop_tx_lock {
+                                    let _ = tx.send(RecordingCommand::Stop);
+                                }
+                            });
 
-                        let ui_tx_for_close_handler = ui_tx.clone();
-                        dialog.connect_close_handler(move || {
-                            let _ = ui_tx_for_close_handler.send_blocking(UIMessage::Close);
-                        });
+                            dialog.setup_key_handlers();
+                            dialog.setup_destination_click_handlers();
 
-                        // Start recording
-                        dialog.update_state(TranscriptionState::Recording, "Listening...", 0.0);
-                        dialog.present();
+                            let ui_tx_for_close_handler = ui_tx.clone();
+                            dialog.connect_close_handler(move || {
+                                let _ = ui_tx_for_close_handler.send_blocking(UIMessage::Close);
+                            });
+
+                            // Start recording
+                            dialog.update_state(TranscriptionState::Recording, "Listening...", 0.0);
+                            dialog.present();
+                        } // Drop mutable borrow
 
                         // Note: recording_active flag was already set by compare_exchange above
 
