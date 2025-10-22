@@ -11,7 +11,7 @@ pub enum HandlerUIMessage {
 }
 
 /// Trait for multi-slot handler implementations
-pub trait MultiSlotHandler {
+pub trait MultiSlotHandler: Send + Sync {
     /// Setup the multi-slot handler (called when recording starts)
     fn setup(&self, ui_tx: Sender<HandlerUIMessage>) -> Result<()>;
 

@@ -760,6 +760,10 @@ impl TranscriptionDialog {
         self.window.present();
     }
 
+    pub fn hide(&self) {
+        self.window.set_visible(false);
+    }
+
     pub fn close(&self) {
         self.window.close();
     }

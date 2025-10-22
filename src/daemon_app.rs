@@ -195,26 +195,44 @@ pub async fn run(
                                         tracing::info!("Storing {} handler window IDs for cleanup", window_ids.len());
                                         *kitty_window_ids.borrow_mut() = window_ids;
                                     }
+                                    CloseImmediately => {
+                                        tracing::info!("Hiding dialog immediately (background processing will continue)");
+                                        dialog_for_updates.hide();
+                                        // Don't break - wait for AutoSendText to do cleanup and close
+                                    }
                                     AutoSendText(text, dest_num) => {
-                                        tracing::info!("Auto-sending text to destination {}: {}", dest_num, text);
+                                        tracing::info!("AutoSendText received: dest_num={}, text='{}'", dest_num, text);
 
-                                        // Use the single output command for all destinations
-                                        if let Some(ref cmd_str) = output_command_for_auto_send {
-                                            execute_output_command(cmd_str, &text, dest_num);
-                                        } else {
-                                            tracing::warn!("No output command configured for sending text");
-                                        }
-
-                                        // Cleanup handler if present
-                                        if let Some(ref h) = handler_for_cleanup {
-                                            let window_ids = kitty_window_ids_clone.borrow().clone();
-                                            if let Err(e) = h.cleanup(window_ids) {
-                                                tracing::error!("Handler cleanup failed: {}", e);
+                                        // Spawn background task for output command and cleanup
+                                        let cmd_str = output_command_for_auto_send.clone();
+                                        tracing::info!("Output command configured: {:?}", cmd_str);
+                                        let handler = handler_for_cleanup.clone();
+                                        let window_ids = kitty_window_ids_clone.borrow().clone();
+                                        tracing::info!("Spawning background thread for output command and cleanup");
+                                        std::thread::spawn(move || {
+                                            tracing::info!("Background thread started");
+                                            // Execute output command in background
+                                            if let Some(ref cmd) = cmd_str {
+                                                tracing::info!("Executing output command: {}", cmd);
+                                                execute_output_command(cmd, &text, dest_num);
+                                                tracing::info!("Output command execution complete");
+                                            } else {
+                                                tracing::warn!("No output command configured for sending text");
                                             }
-                                        }
 
-                                        // Close dialog after auto-send
-                                        tracing::info!("Closing dialog after auto-send");
+                                            // Cleanup handler in background
+                                            if let Some(ref h) = handler {
+                                                tracing::info!("Running handler cleanup");
+                                                if let Err(e) = h.cleanup(window_ids) {
+                                                    tracing::error!("Handler cleanup failed: {}", e);
+                                                }
+                                                tracing::info!("Handler cleanup complete");
+                                            }
+                                            tracing::info!("Background processing complete");
+                                        });
+
+                                        // Close dialog now that background processing is started
+                                        tracing::info!("Closing dialog (background processing started)");
                                         dialog_for_updates.close();
                                         *dialog_state_clone.borrow_mut() = None;
                                         *ui_tx_state_clone.borrow_mut() = None;
@@ -288,13 +306,18 @@ pub async fn run(
 
                         let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);
                         let auto_send_clone2 = Arc::clone(&auto_send_slot_clone);
+                        let ui_tx_for_stop_and_send = ui_tx.clone();
                         dialog.set_on_stop_and_send(move |dest_num| {
                             tracing::info!("Stop and send to slot {} requested", dest_num);
+
+                            // Close dialog immediately for better UX (cleanup happens after transcription)
+                            tracing::info!("Closing dialog immediately (transcription continues in background)");
+                            let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
                             // Store the destination slot for auto-send
                             auto_send_clone2.store(dest_num as u8, Ordering::Release);
 
-                            // Trigger stop to finalize transcription
+                            // Trigger stop to finalize transcription (continues in background)
                             let stop_tx_lock = stop_tx_clone2.lock().unwrap();
                             if let Some(ref tx) = *stop_tx_lock {
                                 let _ = tx.send(RecordingCommand::Stop);
