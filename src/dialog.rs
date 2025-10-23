@@ -14,7 +14,7 @@ fn handle_send_to_all(
     on_send_text: Option<&Arc<dyn Fn(String, usize) + Send + Sync>>,
 ) {
     // Get active destinations (those with non-empty labels)
-    let dest_list = destinations.lock().unwrap();
+    let dest_list = destinations.lock().expect("Mutex poisoned");
     let active_destinations: Vec<_> = dest_list.iter().filter(|d| !d.label.is_empty()).collect();
     let is_multi_slot = active_destinations.len() > 1;
 
@@ -291,7 +291,7 @@ impl TranscriptionDialog {
 
     pub fn set_destinations(&self, destinations: &[DestinationSlot]) {
         // Store the destinations for use in click handlers
-        *self.destinations.lock().unwrap() = destinations.to_vec();
+        *self.destinations.lock().expect("Mutex poisoned") = destinations.to_vec();
 
         // Check if there are any active (non-empty) slots
         let has_active_slots = destinations.iter().any(|slot| !slot.label.is_empty());
@@ -399,7 +399,7 @@ impl TranscriptionDialog {
             button.connect_clicked(move |_| {
                 // Get the actual slot_num from the stored destinations
                 let slot_num = {
-                    let dests = destinations.lock().unwrap();
+                    let dests = destinations.lock().expect("Mutex poisoned");
                     if let Some(dest) = dests.get(button_index) {
                         dest.slot_num
                     } else {
@@ -413,7 +413,7 @@ impl TranscriptionDialog {
                     button_index,
                     slot_num
                 );
-                let current_state = *state.lock().unwrap();
+                let current_state = *state.lock().expect("Mutex poisoned");
                 use TranscriptionState::*;
                 match current_state {
                     Recording | Processing => {
@@ -496,7 +496,7 @@ impl TranscriptionDialog {
 
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
-            let current_state = *state.lock().unwrap();
+            let current_state = *state.lock().expect("Mutex poisoned");
 
             // Escape key handling
             if keyval == gdk::Key::Escape {
@@ -555,7 +555,7 @@ impl TranscriptionDialog {
                 if let Some(idx) = button_index {
                     // Look up the actual slot_num from the destinations
                     let slot_num = {
-                        let dests = destinations.lock().unwrap();
+                        let dests = destinations.lock().expect("Mutex poisoned");
                         if let Some(dest) = dests.get(idx) {
                             Some(dest.slot_num)
                         } else {
@@ -595,7 +595,7 @@ impl TranscriptionDialog {
 
         let text_key_controller = gtk4::EventControllerKey::new();
         text_key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
-            let current_state = *state.lock().unwrap();
+            let current_state = *state.lock().expect("Mutex poisoned");
 
             // Escape key handling in text view
             if keyval == gdk::Key::Escape {
@@ -650,7 +650,7 @@ impl TranscriptionDialog {
                 if let Some(idx) = button_index {
                     // Look up the actual slot_num from the destinations
                     let slot_num = {
-                        let dests = destinations_clone.lock().unwrap();
+                        let dests = destinations_clone.lock().expect("Mutex poisoned");
                         if let Some(dest) = dests.get(idx) {
                             Some(dest.slot_num)
                         } else {
@@ -683,7 +683,7 @@ impl TranscriptionDialog {
     }
 
     pub fn update_state(&self, state: TranscriptionState, message: &str, level: f64) {
-        *self.state.lock().unwrap() = state;
+        *self.state.lock().expect("Mutex poisoned") = state;
 
         use TranscriptionState::*;
         match state {
@@ -783,8 +783,8 @@ impl TranscriptionDialog {
         tracing::info!("Resetting dialog state");
 
         // Reset transcription state
-        *self.state.lock().unwrap() = TranscriptionState::Idle;
-        *self.destinations.lock().unwrap() = Vec::new();
+        *self.state.lock().expect("Mutex poisoned") = TranscriptionState::Idle;
+        *self.destinations.lock().expect("Mutex poisoned") = Vec::new();
 
         // Clear text content
         self.text_view.buffer().set_text("");

@@ -62,7 +62,7 @@ pub fn start_recording_session(
     let stop_rx = Arc::new(Mutex::new(stop_rx));
 
     // Store stop_tx BEFORE starting recording so Escape key can use it
-    *stop_tx_storage.lock().unwrap() = Some(stop_tx);
+    *stop_tx_storage.lock().expect("Mutex poisoned") = Some(stop_tx);
 
     // Start audio stream (runs in background thread)
     recorder.start_recording(chunk_tx, stop_rx)?;
@@ -190,7 +190,7 @@ pub fn start_recording_session(
                                 // Spawn transcription in background to avoid blocking recording
                                 thread::spawn(move || {
                                     // Acquire the lock for the duration of transcription (RAII)
-                                    let _guard = in_flight_mutex.lock().unwrap();
+                                    let _guard = in_flight_mutex.lock().expect("Mutex poisoned");
 
                                     // Build up full text from all segments
                                     let full_text = Arc::new(Mutex::new(String::new()));
@@ -203,7 +203,7 @@ pub fn start_recording_session(
                                             if segment.trim() == "[BLANK_AUDIO]" {
                                                 return;
                                             }
-                                            let mut text = full_text_clone.lock().unwrap();
+                                            let mut text = full_text_clone.lock().expect("Mutex poisoned");
                                             if !text.is_empty() && !text.ends_with(' ') {
                                                 text.push(' ');
                                             }
@@ -212,14 +212,14 @@ pub fn start_recording_session(
                                     ) {
                                         Ok(_) => {
                                             // Take ownership of text to avoid cloning twice
-                                            let complete_text = std::mem::take(&mut *full_text.lock().unwrap());
+                                            let complete_text = std::mem::take(&mut *full_text.lock().expect("Mutex poisoned"));
                                             if !complete_text.is_empty() {
                                                 tracing::info!(
                                                     "Transcription complete: '{}'",
                                                     complete_text
                                                 );
                                                 // Clone once for text_accumulator, move to UI message
-                                                *text_accumulator.lock().unwrap() = complete_text.clone();
+                                                *text_accumulator.lock().expect("Mutex poisoned") = complete_text.clone();
                                                 let _ = ui_tx_transcribe.send_blocking(
                                                     UIMessage::SetTextPreview(complete_text),
                                                 );
@@ -266,12 +266,12 @@ pub fn start_recording_session(
     // Audio stream cleanup happens automatically in the background thread
 
     // Get final transcription result
-    let final_text = accumulated_text.lock().unwrap().clone();
+    let final_text = accumulated_text.lock().expect("Mutex poisoned").clone();
     tracing::info!("Final text from accumulated_text: '{}'", final_text);
 
     // Check if we should auto-send to specific slots (atomically retrieve and clear)
     let auto_slots = {
-        let mut slots = auto_send_slots.lock().unwrap();
+        let mut slots = auto_send_slots.lock().expect("Mutex poisoned");
         let result = slots.clone();
         slots.clear(); // Clear for next session
         result

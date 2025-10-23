@@ -97,7 +97,7 @@ impl PulseIntrospector {
         introspector.get_source_info_by_name(source_name, move |list_result| {
             if let ListResult::Item(source_info) = list_result
                 && let Some(desc) = source_info.description.as_ref() {
-                    *desc_result_clone.lock().unwrap() = Some(desc.to_string());
+                    *desc_result_clone.lock().expect("Mutex poisoned") = Some(desc.to_string());
                 }
         });
 
@@ -105,7 +105,7 @@ impl PulseIntrospector {
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.mainloop.lock();
 
-        let desc = desc_result.lock().unwrap().clone();
+        let desc = desc_result.lock().expect("Mutex poisoned").clone();
         desc.ok_or_else(|| {
             anyhow::anyhow!("Could not get description for source '{}'", source_name)
         })
@@ -128,7 +128,7 @@ impl PulseIntrospector {
         let introspector = self.context.introspect();
         introspector.get_server_info(move |server_info| {
             if let Some(default_source) = server_info.default_source_name.as_ref() {
-                *result_clone.lock().unwrap() = Some(default_source.to_string());
+                *result_clone.lock().expect("Mutex poisoned") = Some(default_source.to_string());
             }
         });
 
@@ -136,7 +136,7 @@ impl PulseIntrospector {
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.mainloop.lock();
 
-        Ok(result.lock().unwrap().clone())
+        Ok(result.lock().expect("Mutex poisoned").clone())
     }
 
     /// List all available source names.

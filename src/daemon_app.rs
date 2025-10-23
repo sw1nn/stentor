@@ -232,7 +232,7 @@ pub async fn run(
                                         tracing::info!("Hiding dialog and cleaning up state");
 
                                         // Stop recording thread if it's still running
-                                        let stop_tx_lock = stop_tx_for_cleanup.lock().unwrap();
+                                        let stop_tx_lock = stop_tx_for_cleanup.lock().expect("Mutex poisoned");
                                         if let Some(ref tx) = *stop_tx_lock {
                                             tracing::info!("Sending stop command to recording thread");
                                             let _ = tx.send(RecordingCommand::Stop);
@@ -269,7 +269,7 @@ pub async fn run(
                             let stop_tx_clone = Arc::clone(&current_stop_tx_clone);
                             dialog.set_on_manual_stop(move || {
                                 tracing::info!("Manual stop requested");
-                                let stop_tx_lock = stop_tx_clone.lock().unwrap();
+                                let stop_tx_lock = stop_tx_clone.lock().expect("Mutex poisoned");
                                 if let Some(ref tx) = *stop_tx_lock {
                                     let _ = tx.send(RecordingCommand::Stop);
                                 }
@@ -326,10 +326,10 @@ pub async fn run(
                                 let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
                                 // Store the destination slot for auto-send
-                                auto_send_slots_clone2.lock().unwrap().push(dest_num);
+                                auto_send_slots_clone2.lock().expect("Mutex poisoned").push(dest_num);
 
                                 // Trigger stop to finalize transcription (continues in background)
-                                let stop_tx_lock = stop_tx_clone2.lock().unwrap();
+                                let stop_tx_lock = stop_tx_clone2.lock().expect("Mutex poisoned");
                                 if let Some(ref tx) = *stop_tx_lock {
                                     let _ = tx.send(RecordingCommand::Stop);
                                 }
@@ -376,8 +376,8 @@ pub async fn run(
                                 }
                             }
                             // Clear stop_tx and auto_send_slots when done
-                            *stop_tx_storage.lock().unwrap() = None;
-                            auto_send_for_recording.lock().unwrap().clear();
+                            *stop_tx_storage.lock().expect("Mutex poisoned") = None;
+                            auto_send_for_recording.lock().expect("Mutex poisoned").clear();
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
                             tracing::info!("Recording thread finished, cleared recording_active flag");
@@ -385,10 +385,10 @@ pub async fn run(
                 }
                 Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription
-                    auto_send_slots_clone.lock().unwrap().push(command_slot);
+                    auto_send_slots_clone.lock().expect("Mutex poisoned").push(command_slot);
 
                     // Trigger manual stop
-                    let stop_tx_lock = current_stop_tx_clone.lock().unwrap();
+                    let stop_tx_lock = current_stop_tx_clone.lock().expect("Mutex poisoned");
                     if let Some(ref tx) = *stop_tx_lock {
                         let _ = tx.send(RecordingCommand::Stop);
                     }
