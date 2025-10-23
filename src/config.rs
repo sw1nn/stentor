@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use xdg::BaseDirectories;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ConfigFile {
     #[serde(default)]
     pub daemon: Config,
@@ -43,6 +44,7 @@ fn default_kitty_base_background() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct ClientConfig {
     #[serde(default)]
     pub source: Option<String>,
@@ -51,14 +53,6 @@ pub struct ClientConfig {
     pub multi_slot_handler: Option<crate::daemon::MultiSlotHandler>,
 }
 
-impl Default for ClientConfig {
-    fn default() -> Self {
-        Self {
-            source: None,
-            multi_slot_handler: None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -145,15 +139,6 @@ impl ConfigFile {
     }
 }
 
-impl Default for ConfigFile {
-    fn default() -> Self {
-        Self {
-            daemon: Config::default(),
-            client: ClientConfig::default(),
-            kitty: KittyConfig::default(),
-        }
-    }
-}
 
 impl ClientConfig {
     /// Load client configuration from XDG config directory

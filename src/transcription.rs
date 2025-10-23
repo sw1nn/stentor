@@ -209,11 +209,10 @@ impl Transcriber {
 
         let mut text = String::new();
         for i in 0..num_segments {
-            if let Some(segment) = state.get_segment(i) {
-                if let Ok(segment_text) = segment.to_str_lossy() {
+            if let Some(segment) = state.get_segment(i)
+                && let Ok(segment_text) = segment.to_str_lossy() {
                     text.push_str(&segment_text);
                 }
-            }
         }
 
         Ok(text.trim().to_string())
@@ -255,11 +254,10 @@ impl Transcriber {
 
         let mut text = String::new();
         for i in 0..num_segments {
-            if let Some(segment) = state.get_segment(i) {
-                if let Ok(segment_text) = segment.to_str_lossy() {
+            if let Some(segment) = state.get_segment(i)
+                && let Ok(segment_text) = segment.to_str_lossy() {
                     text.push_str(&segment_text);
                 }
-            }
         }
 
         Ok(text.trim().to_string())

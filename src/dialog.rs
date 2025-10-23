@@ -267,7 +267,9 @@ impl TranscriptionDialog {
 
         window.set_child(Some(&main_box));
 
-        let dialog = Self {
+        
+
+        Self {
             window,
             state: Arc::new(Mutex::new(TranscriptionState::Idle)),
             spinner,
@@ -284,9 +286,7 @@ impl TranscriptionDialog {
             on_send_text: None,
             on_cancel: None,
             on_stop_and_send: None,
-        };
-
-        dialog
+        }
     }
 
     pub fn set_destinations(&self, destinations: &[DestinationSlot]) {

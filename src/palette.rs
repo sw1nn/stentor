@@ -54,9 +54,9 @@ fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
 fn tint_color(base_hex: &str, r_add: i16, g_add: i16, b_add: i16) -> String {
     let (r, g, b) = hex_to_rgb(base_hex).unwrap_or((30, 30, 46));
 
-    let r_new = ((r as i16 + r_add).max(0).min(255)) as u8;
-    let g_new = ((g as i16 + g_add).max(0).min(255)) as u8;
-    let b_new = ((b as i16 + b_add).max(0).min(255)) as u8;
+    let r_new = (r as i16 + r_add).clamp(0, 255) as u8;
+    let g_new = (g as i16 + g_add).clamp(0, 255) as u8;
+    let b_new = (b as i16 + b_add).clamp(0, 255) as u8;
 
     format!("#{:02x}{:02x}{:02x}", r_new, g_new, b_new)
 }

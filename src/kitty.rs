@@ -272,17 +272,13 @@ pub fn find_available_slot() -> Result<Option<usize>> {
                 for tab in tabs {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
-                            if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
-                                if let Some(slot_str) =
+                            if let Some(env) = window.get("env").and_then(|e| e.as_object())
+                                && let Some(slot_str) =
                                     env.get("STENTOR_SLOT").and_then(|v| v.as_str())
-                                {
-                                    if let Ok(slot_num) = slot_str.parse::<usize>() {
-                                        if slot_num >= 1 && slot_num <= 8 {
+                                    && let Ok(slot_num) = slot_str.parse::<usize>()
+                                        && (1..=8).contains(&slot_num) {
                                             occupied_slots.insert(slot_num);
                                         }
-                                    }
-                                }
-                            }
                         }
                     }
                 }
@@ -305,7 +301,7 @@ pub fn find_available_slot() -> Result<Option<usize>> {
 /// Launch a new Kitty window with the given command and STENTOR_SLOT env var
 /// If launched from within a Kitty window, closes the current window after successful launch
 pub fn launch_with_slot(slot: usize, command: &[String]) -> Result<()> {
-    if slot < 1 || slot > 8 {
+    if !(1..=8).contains(&slot) {
         anyhow::bail!("Slot must be between 1 and 8, got {}", slot);
     }
 
@@ -523,8 +519,8 @@ fn parse_worktree_label(cwd: &str) -> String {
         .arg("--show-current")
         .output();
 
-    if let Ok(output) = branch_output {
-        if output.status.success() {
+    if let Ok(output) = branch_output
+        && output.status.success() {
             let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
             if !branch.is_empty() {
                 // Get the remote origin URL
@@ -536,23 +532,21 @@ fn parse_worktree_label(cwd: &str) -> String {
                     .arg("origin")
                     .output();
 
-                if let Ok(origin) = origin_output {
-                    if origin.status.success() {
+                if let Ok(origin) = origin_output
+                    && origin.status.success() {
                         let origin_url = String::from_utf8_lossy(&origin.stdout).trim().to_string();
                         // Extract repo name from URL (last segment, without .git)
-                        if let Some(repo_name) = origin_url.split('/').last() {
+                        if let Some(repo_name) = origin_url.split('/').next_back() {
                             let repo_name = repo_name.trim_end_matches(".git");
                             // Return multi-line label: repo name on first line, branch on second
                             return format!("{}\n{}", repo_name, branch);
                         }
                     }
-                }
             }
         }
-    }
 
     // Fall back to last directory component
-    cwd.split('/').last().unwrap_or(cwd).to_string()
+    cwd.split('/').next_back().unwrap_or(cwd).to_string()
 }
 
 /// Kitty terminal multi-slot handler implementation

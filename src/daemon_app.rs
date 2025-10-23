@@ -299,11 +299,10 @@ pub async fn run(
                                     }
 
                                     // Cleanup handler in background
-                                    if let Some(ref h) = handler {
-                                        if let Err(e) = h.cleanup(window_ids) {
+                                    if let Some(ref h) = handler
+                                        && let Err(e) = h.cleanup(window_ids) {
                                             tracing::error!("Handler cleanup failed: {}", e);
                                         }
-                                    }
 
                                     // Send final Close after background processing
                                     let _ = ui_tx_close.send_blocking(UIMessage::Close);
