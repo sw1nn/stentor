@@ -222,7 +222,6 @@ impl Transcriber {
     /// Transcribe audio data
     ///
     /// Audio should be mono, 16kHz sample rate, f32 format
-    #[allow(dead_code)]
     pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
         // Convert audio to the format whisper-rs expects
         let mut state = self
@@ -264,12 +263,6 @@ impl Transcriber {
         }
 
         Ok(text.trim().to_string())
-    }
-
-    /// Get available languages
-    #[allow(dead_code)]
-    pub fn get_language(&self) -> Option<&str> {
-        self.language.as_deref()
     }
 }
 

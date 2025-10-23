@@ -196,9 +196,6 @@ pub async fn run(
                                     SetTextPreview(text) => {
                                         dialog_for_updates.set_text_preview(&text);
                                     }
-                                    SetMicrophone(name) => {
-                                        dialog_for_updates.set_source_info(&name);
-                                    }
                                     SetDestinations(destinations) => {
                                         tracing::info!("Updating destinations with {} slots", destinations.len());
                                         dialog_for_updates.set_destinations(&destinations);

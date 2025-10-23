@@ -14,8 +14,6 @@ use crate::transcription::Transcriber;
 #[derive(Debug, Clone)]
 pub enum UIMessage {
     UpdateState(TranscriptionState, String, f64),
-    #[allow(dead_code)]
-    SetMicrophone(String),
     SetText(String),
     SetTextPreview(String),
     AutoSendText(String, usize), // Auto-send text to specified slot (text, slot_num)

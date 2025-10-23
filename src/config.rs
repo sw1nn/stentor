@@ -157,7 +157,6 @@ impl Default for ConfigFile {
 
 impl ClientConfig {
     /// Load client configuration from XDG config directory
-    #[allow(dead_code)] // Used in client binary
     pub fn load() -> Result<Self> {
         let xdg_dirs = BaseDirectories::with_prefix("stentor");
 
@@ -215,16 +214,6 @@ impl Config {
         Ok(config_file.daemon)
     }
 
-    /// Get the path to the config file (creates directory if needed)
-    #[allow(dead_code)]
-    pub fn config_path() -> Result<PathBuf> {
-        let xdg_dirs = BaseDirectories::with_prefix("stentor");
-
-        xdg_dirs
-            .place_config_file("config.toml")
-            .context("Failed to determine config file path")
-    }
-
     /// Get the socket path in XDG runtime directory
     pub fn socket_path(&self) -> Result<PathBuf> {
         let xdg_dirs = BaseDirectories::new();
@@ -234,20 +223,6 @@ impl Config {
             .context("No XDG_RUNTIME_DIR available")?;
 
         Ok(runtime_dir.join(&self.socket_name))
-    }
-
-    /// Save configuration to file
-    #[allow(dead_code)]
-    pub fn save(&self) -> Result<()> {
-        let path = Self::config_path()?;
-
-        let contents = toml::to_string_pretty(self).context("Failed to serialize configuration")?;
-
-        std::fs::write(&path, contents)
-            .with_context(|| format!("Failed to write config file: {}", path.display()))?;
-
-        tracing::info!("Saved config to: {}", path.display());
-        Ok(())
     }
 }
 

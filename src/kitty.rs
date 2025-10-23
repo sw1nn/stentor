@@ -432,24 +432,6 @@ pub fn set_background_color(color: &str, window_id: u64) -> Result<()> {
     send_kitty_command(cmd)
 }
 
-#[allow(dead_code)]
-pub fn set_window_env_var(var_name: &str, var_value: &str, window_id: u64) -> Result<()> {
-    let match_window = Some(format!("id:{}", window_id));
-
-    let mut vars = HashMap::new();
-    vars.insert(var_name.to_string(), var_value.to_string());
-
-    let payload = SetUserVarsPayload { match_window, vars };
-
-    let cmd = KittyCommand {
-        cmd: "set-user-vars".to_string(),
-        version: Some(vec![0, 35, 0]),
-        payload: Some(payload),
-    };
-
-    send_kitty_command(cmd)
-}
-
 /// Set both background color and environment variable in a single socket connection
 /// This is much faster than calling set_background_color and set_window_env_var separately
 /// Fire-and-forget style: sends both commands without waiting for responses

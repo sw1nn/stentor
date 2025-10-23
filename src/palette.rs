@@ -30,12 +30,6 @@ impl Palette {
         let name = color_names[slot - 1];
         self.colors.get(name).map(|hex| (name, hex.as_str()))
     }
-
-    /// Get all colors
-    #[allow(dead_code)]
-    pub fn get_color(&self, name: &str) -> Option<&str> {
-        self.colors.get(name).map(|s| s.as_str())
-    }
 }
 
 fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
@@ -75,10 +69,10 @@ mod tests {
     fn test_palette_colors() {
         let palette = Palette::new("#1e1e2e");
 
-        assert!(palette.get_color("red").is_some());
-        assert!(palette.get_color("green").is_some());
-        assert!(palette.get_color("yellow").is_some());
-        assert!(palette.get_color("blue").is_some());
+        assert!(palette.get_slot_color(1).is_some()); // red
+        assert!(palette.get_slot_color(2).is_some()); // green
+        assert!(palette.get_slot_color(3).is_some()); // yellow
+        assert!(palette.get_slot_color(4).is_some()); // blue
     }
 
     #[test]

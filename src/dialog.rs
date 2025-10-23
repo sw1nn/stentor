@@ -13,15 +13,12 @@ fn handle_send_to_all(
     on_stop_and_send: Option<&Arc<dyn Fn(usize) + Send + Sync>>,
     on_send_text: Option<&Arc<dyn Fn(String, usize) + Send + Sync>>,
 ) {
-    use TranscriptionState::*;
-
     // Get active destinations (those with non-empty labels)
     let dest_list = destinations.lock().unwrap();
-    let active_destinations: Vec<_> = dest_list.iter()
-        .filter(|d| !d.label.is_empty())
-        .collect();
+    let active_destinations: Vec<_> = dest_list.iter().filter(|d| !d.label.is_empty()).collect();
     let is_multi_slot = active_destinations.len() > 1;
 
+    use TranscriptionState::*;
     match current_state {
         Recording | Processing => {
             // Stop recording and send to all active slots (or default slot 0)
@@ -46,7 +43,11 @@ fn handle_send_to_all(
 
                 if is_multi_slot {
                     for dest in active_destinations {
-                        tracing::info!("Alt+Enter: sending to slot {} with text: '{}'", dest.slot_num, text);
+                        tracing::info!(
+                            "Alt+Enter: sending to slot {} with text: '{}'",
+                            dest.slot_num,
+                            text
+                        );
                         callback(text.clone(), dest.slot_num);
                     }
                 } else {
@@ -67,7 +68,6 @@ fn handle_send_to_slot(
     on_send_text: Option<&Arc<dyn Fn(String, usize) + Send + Sync>>,
 ) {
     use TranscriptionState::*;
-
     match current_state {
         Recording | Processing => {
             // Stop recording and send to specific slot
@@ -134,8 +134,6 @@ pub enum TranscriptionState {
     Recording,
     Processing,
     Reviewing,
-    #[allow(dead_code)]
-    Typing,
     Error,
 }
 
@@ -708,24 +706,16 @@ impl TranscriptionDialog {
                 self.text_preview.set_visible(true); // Show text preview during processing
                 self.scrolled.set_visible(false); // Hide editable text view during processing
             }
-            TranscriptionState::Reviewing => {
+            Reviewing => {
                 self.spinner.stop();
                 self.status_label.set_markup(&format!(
-                    "<small>✓ {} • <span foreground='#888888'>Ctrl+Enter to send • Escape to cancel</span></small>",
+                    "<small>✓ {} • <span foreground='#888888'>Alt+Enter to send • Escape to cancel</span></small>",
                     message
                 ));
                 self.level_bar.set_visible(false);
                 self.text_preview.set_visible(false);
                 self.scrolled.set_visible(true);
                 self.text_view.set_editable(true); // Editable during reviewing
-            }
-            Typing => {
-                self.spinner.start();
-                self.status_label
-                    .set_markup(&format!("<small>⌨️ {}</small>", message));
-                self.level_bar.set_visible(false);
-                self.text_preview.set_visible(false);
-                self.scrolled.set_visible(false);
             }
             Error => {
                 self.spinner.stop();
@@ -776,34 +766,9 @@ impl TranscriptionDialog {
         self.text_preview.set_text(text);
     }
 
-    #[allow(dead_code)]
-    pub fn get_current_text(&self) -> String {
-        let current_state = *self.state.lock().unwrap();
-
-        use TranscriptionState::*;
-        match current_state {
-            Reviewing => {
-                // Get text from editable view
-                let buffer = self.text_view.buffer();
-                buffer
-                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                    .to_string()
-            }
-            _ => {
-                // Get text from preview label
-                self.text_preview.text().to_string()
-            }
-        }
-    }
-
     pub fn set_transcribed_text(&self, text: &str) {
         let buffer = self.text_view.buffer();
         buffer.set_text(text);
-    }
-
-    #[allow(dead_code)]
-    pub fn set_text_editable(&self, editable: bool) {
-        self.text_view.set_editable(editable);
     }
 
     pub fn present(&self) {

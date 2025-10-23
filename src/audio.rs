@@ -346,8 +346,15 @@ pub enum VadState {
 pub struct VadResult {
     pub state: VadState,
     pub should_stop: bool,
-    #[allow(dead_code)]
-    pub has_minimum_speech: bool,
+}
+
+impl From<VadState> for VadResult {
+    fn from(state: VadState) -> Self {
+        Self {
+            state,
+            should_stop: false,
+        }
+    }
 }
 
 impl VoiceActivityDetector {
@@ -381,59 +388,23 @@ impl VoiceActivityDetector {
         let is_speech = rms > self.silence_threshold;
         let has_minimum_speech = speech_chunks >= min_speech_chunk_threshold;
 
-        match current_state {
-            VadState::Idle => {
-                if is_speech {
-                    VadResult {
-                        state: VadState::Speaking,
-                        should_stop: false,
-                        has_minimum_speech: false,
-                    }
-                } else {
-                    VadResult {
-                        state: VadState::Idle,
-                        should_stop: false,
-                        has_minimum_speech: false,
-                    }
-                }
-            }
-            VadState::Speaking => {
-                if is_speech {
-                    VadResult {
-                        state: VadState::Speaking,
-                        should_stop: false,
-                        has_minimum_speech,
-                    }
-                } else {
-                    VadResult {
-                        state: VadState::SilenceAfterSpeech,
-                        should_stop: false,
-                        has_minimum_speech,
-                    }
-                }
-            }
-            VadState::SilenceAfterSpeech => {
-                if is_speech {
-                    VadResult {
-                        state: VadState::Speaking,
-                        should_stop: false,
-                        has_minimum_speech,
-                    }
-                } else if silence_chunks >= stop_silence_chunk_threshold {
-                    // Use the longer stop_silence_duration threshold
-                    VadResult {
-                        state: VadState::SilenceAfterSpeech,
-                        should_stop: has_minimum_speech,
-                        has_minimum_speech,
-                    }
-                } else {
-                    VadResult {
-                        state: VadState::SilenceAfterSpeech,
-                        should_stop: false,
-                        has_minimum_speech,
-                    }
-                }
-            }
+        use VadState::*;
+        let next_state = match (current_state, is_speech) {
+            (Idle, true) => Speaking,
+            (Idle, false) => Idle,
+            (Speaking, true) => Speaking,
+            (Speaking, false) => SilenceAfterSpeech,
+            (SilenceAfterSpeech, true) => Speaking,
+            (SilenceAfterSpeech, false) => SilenceAfterSpeech,
+        };
+
+        let should_stop = next_state == SilenceAfterSpeech
+            && silence_chunks >= stop_silence_chunk_threshold
+            && has_minimum_speech;
+
+        VadResult {
+            state: next_state,
+            should_stop,
         }
     }
 }
