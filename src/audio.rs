@@ -535,4 +535,28 @@ mod tests {
         let result = vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, 10);
         assert_eq!(result.state, VadState::SilenceAfterSpeech);
     }
+
+    #[test]
+    fn test_audio_chunk_creation() {
+        let data = vec![0.1, 0.2, 0.3, 0.4];
+        let chunk = AudioChunk {
+            data: data.clone(),
+            rms: 0.5,
+        };
+
+        assert_eq!(chunk.data.len(), 4);
+        assert_eq!(chunk.rms, 0.5);
+    }
+
+    #[test]
+    fn test_audio_chunk_clone() {
+        let chunk = AudioChunk {
+            data: vec![1.0, 2.0],
+            rms: 1.5,
+        };
+
+        let cloned = chunk.clone();
+        assert_eq!(chunk.data, cloned.data);
+        assert_eq!(chunk.rms, cloned.rms);
+    }
 }

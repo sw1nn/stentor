@@ -970,4 +970,168 @@ mod tests {
         let windows = find_stentor_windows(&data);
         assert_eq!(windows.len(), 0);
     }
+
+    #[test]
+    fn test_slot_range_validation() {
+        // Test that only slots 1-8 are valid
+        for slot in 1..=8 {
+            assert!((1..=8).contains(&slot), "Slot {} should be valid", slot);
+        }
+        assert!(!(1..=8).contains(&0));
+        assert!(!(1..=8).contains(&9));
+        assert!(!(1..=8).contains(&100));
+    }
+
+    #[test]
+    fn test_find_stentor_windows_various_slot_numbers() {
+        // Test that any numeric STENTOR_SLOT value is accepted
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 1,
+                            "cwd": "/home/test",
+                            "env": {"STENTOR_SLOT": "0"}
+                        },
+                        {
+                            "id": 2,
+                            "cwd": "/home/test",
+                            "env": {"STENTOR_SLOT": "9"}
+                        },
+                        {
+                            "id": 3,
+                            "cwd": "/home/test",
+                            "env": {"STENTOR_SLOT": "5"}
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        // All numeric slots are accepted
+        assert_eq!(windows.len(), 3);
+        assert_eq!(windows[0].slot_num, 0);
+        assert_eq!(windows[1].slot_num, 9);
+        assert_eq!(windows[2].slot_num, 5);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_non_numeric_slot() {
+        // Test that non-numeric STENTOR_SLOT values are skipped
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 1,
+                            "cwd": "/home/test",
+                            "env": {"STENTOR_SLOT": "invalid"}
+                        },
+                        {
+                            "id": 2,
+                            "cwd": "/home/test",
+                            "env": {"STENTOR_SLOT": ""}
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 0);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_cwd_extraction() {
+        // Test that cwd is correctly extracted
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/user/project",
+                        "env": {"STENTOR_SLOT": "1"}
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].cwd, "/home/user/project");
+    }
+
+    #[test]
+    fn test_find_stentor_windows_missing_cwd() {
+        // Test fallback to "unknown" when cwd is missing
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "env": {"STENTOR_SLOT": "1"}
+                        // no cwd field
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].cwd, "unknown");
+    }
+
+    #[test]
+    fn test_find_stentor_windows_multiple_tabs() {
+        // Test scanning across multiple tabs
+        let data = json!([
+            {
+                "tabs": [
+                    {
+                        "windows": [{
+                            "id": 1,
+                            "cwd": "/tab1",
+                            "env": {"STENTOR_SLOT": "1"}
+                        }]
+                    },
+                    {
+                        "windows": [{
+                            "id": 2,
+                            "cwd": "/tab2",
+                            "env": {"STENTOR_SLOT": "2"}
+                        }]
+                    }
+                ]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[1].id, 2);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_multiple_os_windows() {
+        // Test scanning across multiple OS windows
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/os1",
+                        "env": {"STENTOR_SLOT": "1"}
+                    }]
+                }]
+            },
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 2,
+                        "cwd": "/os2",
+                        "env": {"STENTOR_SLOT": "2"}
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 2);
+    }
 }

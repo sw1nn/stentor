@@ -266,4 +266,101 @@ mod tests {
             assert_eq!(cmd, parsed);
         }
     }
+
+    #[test]
+    fn test_multi_slot_handler_default() {
+        assert_eq!(MultiSlotHandler::default(), MultiSlotHandler::None);
+    }
+
+    #[test]
+    fn test_multi_slot_handler_serialization() {
+        let none = MultiSlotHandler::None;
+        let json = serde_json::to_string(&none).unwrap();
+        assert_eq!(json, r#""none""#);
+        let parsed: MultiSlotHandler = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, MultiSlotHandler::None);
+
+        let kitty = MultiSlotHandler::Kitty;
+        let json = serde_json::to_string(&kitty).unwrap();
+        assert_eq!(json, r#""kitty""#);
+        let parsed: MultiSlotHandler = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, MultiSlotHandler::Kitty);
+    }
+
+    #[test]
+    fn test_daemon_command_json_format() {
+        let cmd = DaemonCommand::Start {
+            unmute_source: false,
+            source: None,
+            multi_slot_handler: MultiSlotHandler::None,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""type":"start""#));
+        assert!(json.contains(r#""unmute_source":false"#));
+    }
+
+    #[test]
+    fn test_daemon_command_stop_default_slot() {
+        let json = r#"{"type":"stop"}"#;
+        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, 0),
+            _ => panic!("Expected Stop command"),
+        }
+    }
+
+    #[test]
+    fn test_daemon_command_status_and_quit() {
+        let status = DaemonCommand::Status;
+        let quit = DaemonCommand::Quit;
+
+        let json_status = serde_json::to_string(&status).unwrap();
+        let json_quit = serde_json::to_string(&quit).unwrap();
+
+        assert!(json_status.contains(r#""type":"status""#));
+        assert!(json_quit.contains(r#""type":"quit""#));
+    }
+
+    #[test]
+    fn test_daemon_command_parsing_from_json() {
+        // Test Start command with minimal JSON
+        let json = r#"{"type":"start"}"#;
+        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            DaemonCommand::Start {
+                unmute_source,
+                source,
+                multi_slot_handler,
+            } => {
+                assert!(!unmute_source); // default false
+                assert!(source.is_none()); // default none
+                assert_eq!(multi_slot_handler, MultiSlotHandler::None); // default none
+            }
+            _ => panic!("Expected Start command"),
+        }
+
+        // Test Start command with all fields
+        let json = r##"{"type":"start","unmute_source":true,"source":"my-mic","multi_slot_handler":"kitty"}"##;
+        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            DaemonCommand::Start {
+                unmute_source,
+                source,
+                multi_slot_handler,
+            } => {
+                assert!(unmute_source);
+                assert_eq!(source, Some("my-mic".to_string()));
+                assert_eq!(multi_slot_handler, MultiSlotHandler::Kitty);
+            }
+            _ => panic!("Expected Start command"),
+        }
+
+        // Test Stop command with slot
+        let json = r#"{"type":"stop","command_slot":3}"#;
+        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
+        match cmd {
+            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, 3),
+            _ => panic!("Expected Stop command"),
+        }
+    }
 }
