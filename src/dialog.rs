@@ -441,26 +441,62 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter key handling - stop and send immediately during recording, or send text during reviewing
+            // Alt+Enter key handling - stop and send to all slots during recording, or send text to all during reviewing
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
-                && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && modifiers.contains(gdk::ModifierType::ALT_MASK)
             {
                 use TranscriptionState::*;
                 match current_state {
                     Recording | Processing => {
-                        // Stop recording and send to default slot (0)
-                        if let Some(ref callback) = on_stop_and_send {
-                            callback(0);
+                        // In multi-slot mode, send to all active slots; otherwise send to default (0)
+                        let dest_list = destinations.lock().unwrap();
+                        let active_destinations: Vec<_> = dest_list.iter()
+                            .filter(|d| !d.label.is_empty()) // Only active slots with labels
+                            .collect();
+
+                        if active_destinations.len() > 1 {
+                            // Multi-slot mode: stop and send to all active slots
+                            if let Some(ref callback) = on_stop_and_send {
+                                for dest in active_destinations {
+                                    tracing::info!("Alt+Enter: sending to slot {}", dest.slot_num);
+                                    callback(dest.slot_num);
+                                }
+                            }
+                        } else {
+                            // Single slot or no slots: send to default slot (0)
+                            if let Some(ref callback) = on_stop_and_send {
+                                callback(0);
+                            }
                         }
                     }
                     Reviewing => {
-                        // Send text from editable view
-                        if let Some(ref callback) = on_send_text {
-                            let buffer = text_view.buffer();
-                            let text = buffer
-                                .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                .to_string();
-                            callback(text, 0);
+                        // In multi-slot mode, send to all active slots; otherwise send to default (0)
+                        let dest_list = destinations.lock().unwrap();
+                        let active_destinations: Vec<_> = dest_list.iter()
+                            .filter(|d| !d.label.is_empty()) // Only active slots with labels
+                            .collect();
+
+                        if active_destinations.len() > 1 {
+                            // Multi-slot mode: send text to all active slots
+                            if let Some(ref callback) = on_send_text {
+                                let buffer = text_view.buffer();
+                                let text = buffer
+                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                    .to_string();
+                                for dest in active_destinations {
+                                    tracing::info!("Alt+Enter: sending to slot {} with text: '{}'", dest.slot_num, text);
+                                    callback(text.clone(), dest.slot_num);
+                                }
+                            }
+                        } else {
+                            // Single slot or no slots: send to default slot (0)
+                            if let Some(ref callback) = on_send_text {
+                                let buffer = text_view.buffer();
+                                let text = buffer
+                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                                    .to_string();
+                                callback(text, 0);
+                            }
                         }
                     }
                     _ => {}
@@ -562,9 +598,9 @@ impl TranscriptionDialog {
                 }
             }
 
-            // Ctrl+Enter in text view - stop and send during recording, or send during reviewing
+            // Alt+Enter in text view - stop and send during recording, or send during reviewing
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
-                && modifiers.contains(gdk::ModifierType::CONTROL_MASK)
+                && modifiers.contains(gdk::ModifierType::ALT_MASK)
             {
                 use TranscriptionState::*;
                 match current_state {

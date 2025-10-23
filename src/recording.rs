@@ -1,6 +1,5 @@
 use anyhow::Result;
 use async_channel::Sender;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -33,7 +32,7 @@ pub fn start_recording_session(
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     unmute_source: bool,
     source: Option<String>,
-    auto_send_slot: Arc<AtomicU8>,
+    auto_send_slots: Arc<Mutex<Vec<usize>>>,
 ) -> Result<()> {
     tracing::info!("Starting recording session");
 
@@ -272,15 +271,14 @@ pub fn start_recording_session(
     let final_text = accumulated_text.lock().unwrap().clone();
     tracing::info!("Final text from accumulated_text: '{}'", final_text);
 
-    // Check if we should auto-send to a specific slot (atomically retrieve and clear)
-    let slot_value = auto_send_slot.swap(u8::MAX, Ordering::AcqRel);
-    tracing::info!("Auto-send slot value: {}", slot_value);
-    let auto_slot = if slot_value == u8::MAX {
-        None
-    } else {
-        Some(slot_value as usize)
+    // Check if we should auto-send to specific slots (atomically retrieve and clear)
+    let auto_slots = {
+        let mut slots = auto_send_slots.lock().unwrap();
+        let result = slots.clone();
+        slots.clear(); // Clear for next session
+        result
     };
-    tracing::info!("Auto-send slot: {:?}", auto_slot);
+    tracing::info!("Auto-send slots: {:?}", auto_slots);
 
     if final_text.is_empty() {
         tracing::info!("Final text is empty, checking recorded audio");
@@ -298,14 +296,19 @@ pub fn start_recording_session(
                     tracing::info!("Final transcription result (cleaned): '{}'", cleaned);
                     if !cleaned.is_empty() {
                         // Auto-send or show for review
-                        if let Some(slot) = auto_slot {
-                            tracing::info!(
-                                "Auto-sending to slot {} with text: '{}'",
-                                slot,
-                                cleaned
-                            );
-                            let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned, slot));
-                            tracing::info!("AutoSendText message sent");
+                        if !auto_slots.is_empty() {
+                            // Send to all requested slots
+                            for slot in &auto_slots {
+                                tracing::info!(
+                                    "Auto-sending to slot {} with text: '{}'",
+                                    slot,
+                                    cleaned
+                                );
+                                let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned.clone(), *slot));
+                            }
+                            tracing::info!("AutoSendText messages sent to {} slots", auto_slots.len());
+                            // Send Close message after all AutoSendText messages to cleanup and hide dialog
+                            let _ = ui_tx.send_blocking(UIMessage::Close);
                         } else {
                             tracing::info!("Showing text for review");
                             let _ = ui_tx.send_blocking(UIMessage::SetText(cleaned.clone()));
@@ -338,14 +341,19 @@ pub fn start_recording_session(
     }
 
     // Auto-send or show final result in dialog for review
-    if let Some(slot) = auto_slot {
-        tracing::info!(
-            "Auto-sending final_text to slot {} with text: '{}'",
-            slot,
-            final_text
-        );
-        let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text, slot));
-        tracing::info!("AutoSendText message sent (from accumulated text)");
+    if !auto_slots.is_empty() {
+        // Send to all requested slots
+        for slot in &auto_slots {
+            tracing::info!(
+                "Auto-sending final_text to slot {} with text: '{}'",
+                slot,
+                final_text
+            );
+            let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text.clone(), *slot));
+        }
+        tracing::info!("AutoSendText messages sent to {} slots (from accumulated text)", auto_slots.len());
+        // Send Close message after all AutoSendText messages to cleanup and hide dialog
+        let _ = ui_tx.send_blocking(UIMessage::Close);
     } else {
         tracing::info!("Showing final_text for review");
         let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));

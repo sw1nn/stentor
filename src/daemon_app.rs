@@ -5,7 +5,7 @@ use gtk4::{Application, glib};
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
@@ -72,8 +72,8 @@ pub async fn run(
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
         Arc::new(Mutex::new(None));
-    // Store the command slot to send to when Stop is called (Arc<AtomicU8> for lock-free access, u8::MAX = None)
-    let auto_send_slot: Arc<AtomicU8> = Arc::new(AtomicU8::new(u8::MAX));
+    // Store the command slots to send to when Stop is called (Arc<Mutex<Vec<usize>>> to support multiple slots)
+    let auto_send_slots: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
     // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
     let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -81,7 +81,7 @@ pub async fn run(
     let current_dialog_clone = Rc::clone(&current_dialog);
     let current_ui_tx_clone = Rc::clone(&current_ui_tx);
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
-    let auto_send_slot_clone = Arc::clone(&auto_send_slot);
+    let auto_send_slots_clone = Arc::clone(&auto_send_slots);
     let recording_active_clone = Arc::clone(&recording_active);
     let app_clone = app.clone();
     let config_clone = Arc::clone(&config);
@@ -178,7 +178,6 @@ pub async fn run(
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
                         let output_command_for_auto_send = output_command.clone();
-                        let handler_for_cleanup = handler.clone();
                         let kitty_window_ids: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
                         let kitty_window_ids_clone = Rc::clone(&kitty_window_ids);
                         let kitty_window_ids_for_send_callback = Rc::clone(&kitty_window_ids);
@@ -216,43 +215,21 @@ pub async fn run(
                                     AutoSendText(text, dest_num) => {
                                         tracing::info!("AutoSendText received: dest_num={}, text='{}'", dest_num, text);
 
-                                        // Spawn background task for output command and cleanup
+                                        // Execute output command in background
                                         let cmd_str = output_command_for_auto_send.clone();
                                         tracing::info!("Output command configured: {:?}", cmd_str);
-                                        let handler = handler_for_cleanup.clone();
-                                        let window_ids = kitty_window_ids_clone.borrow().clone();
-                                        tracing::info!("Spawning background thread for output command and cleanup");
                                         std::thread::spawn(move || {
-                                            tracing::info!("Background thread started");
-                                            // Execute output command in background
+                                            tracing::info!("Background thread started for slot {}", dest_num);
                                             if let Some(ref cmd) = cmd_str {
-                                                tracing::info!("Executing output command: {}", cmd);
+                                                tracing::info!("Executing output command for slot {}: {}", dest_num, cmd);
                                                 execute_output_command(cmd, &text, dest_num);
-                                                tracing::info!("Output command execution complete");
+                                                tracing::info!("Output command execution complete for slot {}", dest_num);
                                             } else {
                                                 tracing::warn!("No output command configured for sending text");
                                             }
-
-                                            // Cleanup handler in background
-                                            if let Some(ref h) = handler {
-                                                tracing::info!("Running handler cleanup");
-                                                if let Err(e) = h.cleanup(window_ids) {
-                                                    tracing::error!("Handler cleanup failed: {}", e);
-                                                }
-                                                tracing::info!("Handler cleanup complete");
-                                            }
-                                            tracing::info!("Background processing complete");
+                                            tracing::info!("Background processing complete for slot {}", dest_num);
                                         });
-
-                                        // Hide dialog now that background processing is started
-                                        // Don't close/destroy - dialog will be reused for next session
-                                        tracing::info!("Hiding dialog (background processing started)");
-                                        dialog_for_updates.hide();
-                                        // Clear session state (dialog persists for reuse)
-                                        *ui_tx_state_clone.borrow_mut() = None;
-                                        // Clear recording active flag
-                                        recording_active_for_ui.store(false, Ordering::Release);
-                                        break;
+                                        // Don't break - continue processing more AutoSendText messages
                                     }
                                     Close => {
                                         tracing::info!("Hiding dialog and cleaning up state");
@@ -343,7 +320,7 @@ pub async fn run(
                             });
 
                             let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);
-                            let auto_send_clone2 = Arc::clone(&auto_send_slot_clone);
+                            let auto_send_slots_clone2 = Arc::clone(&auto_send_slots_clone);
                             let ui_tx_for_stop_and_send = ui_tx.clone();
                             dialog.set_on_stop_and_send(move |dest_num| {
                                 tracing::info!("Stop and send to slot {} requested", dest_num);
@@ -353,7 +330,7 @@ pub async fn run(
                                 let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
                                 // Store the destination slot for auto-send
-                                auto_send_clone2.store(dest_num as u8, Ordering::Release);
+                                auto_send_slots_clone2.lock().unwrap().push(dest_num);
 
                                 // Trigger stop to finalize transcription (continues in background)
                                 let stop_tx_lock = stop_tx_clone2.lock().unwrap();
@@ -382,7 +359,7 @@ pub async fn run(
                         let transcriber_clone = Arc::clone(&transcriber_clone);
                         let ui_tx_for_recording = ui_tx.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
-                        let auto_send_for_recording = Arc::clone(&auto_send_slot_clone);
+                        let auto_send_for_recording = Arc::clone(&auto_send_slots_clone);
                         let recording_active_for_thread = Arc::clone(&recording_active_clone);
 
                         thread::spawn(move || {
@@ -402,9 +379,9 @@ pub async fn run(
                                     tracing::error!("Recording session error: {}", e);
                                 }
                             }
-                            // Clear stop_tx and auto_send_slot when done
+                            // Clear stop_tx and auto_send_slots when done
                             *stop_tx_storage.lock().unwrap() = None;
-                            auto_send_for_recording.store(u8::MAX, Ordering::Release);
+                            auto_send_for_recording.lock().unwrap().clear();
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
                             tracing::info!("Recording thread finished, cleared recording_active flag");
@@ -412,7 +389,7 @@ pub async fn run(
                 }
                 Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription
-                    auto_send_slot_clone.store(command_slot as u8, Ordering::Release);
+                    auto_send_slots_clone.lock().unwrap().push(command_slot);
 
                     // Trigger manual stop
                     let stop_tx_lock = current_stop_tx_clone.lock().unwrap();
