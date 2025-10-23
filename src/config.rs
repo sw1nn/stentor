@@ -252,4 +252,108 @@ mod tests {
             Some("tmux load-buffer -".to_string())
         );
     }
+
+    #[test]
+    fn test_config_with_aliases() {
+        let toml_str = r#"
+            model = "base"
+            silence-duration = 2.0
+            silence-threshold = 0.02
+            min-speech-duration = 1.0
+        "#;
+
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.model, "base");
+        assert_eq!(config.silence_duration, 2.0);
+        assert_eq!(config.silence_threshold, 0.02);
+        assert_eq!(config.min_speech_duration, 1.0);
+    }
+
+    #[test]
+    fn test_config_file_default() {
+        let config_file = ConfigFile::default();
+        assert_eq!(config_file.daemon.model, "tiny");
+        assert_eq!(config_file.daemon.language, "en");
+        assert!(config_file.client.source.is_none());
+        assert_eq!(config_file.kitty.base_background_color, "#1e1e2e");
+    }
+
+    #[test]
+    fn test_config_file_serialization() {
+        let config_file = ConfigFile::default();
+        let toml_str = toml::to_string(&config_file).unwrap();
+        let parsed: ConfigFile = toml::from_str(&toml_str).unwrap();
+
+        assert_eq!(config_file.daemon.model, parsed.daemon.model);
+        assert_eq!(
+            config_file.kitty.base_background_color,
+            parsed.kitty.base_background_color
+        );
+    }
+
+    #[test]
+    fn test_client_config_default() {
+        let client_config = ClientConfig::default();
+        assert!(client_config.source.is_none());
+        assert!(client_config.multi_slot_handler.is_none());
+    }
+
+    #[test]
+    fn test_client_config_with_source() {
+        let toml_str = r#"
+            source = "alsa_input.usb-microphone"
+        "#;
+
+        let client_config: ClientConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            client_config.source,
+            Some("alsa_input.usb-microphone".to_string())
+        );
+    }
+
+    #[test]
+    fn test_kitty_config_default() {
+        let kitty_config = KittyConfig::default();
+        assert!(kitty_config.background_color_cmd.is_none());
+        assert_eq!(kitty_config.base_background_color, "#1e1e2e");
+        assert!(kitty_config.output_command.is_none());
+    }
+
+    #[test]
+    fn test_kitty_config_with_values() {
+        let toml_str = r##"
+            background-color-cmd = "kitty @ set-colors --match id:{window_id} background={color}"
+            base-background-color = "#282828"
+            output-command = "kitty @ send-text --match id:{window_id}"
+        "##;
+
+        let kitty_config: KittyConfig = toml::from_str(toml_str).unwrap();
+        assert!(kitty_config.background_color_cmd.is_some());
+        assert_eq!(kitty_config.base_background_color, "#282828");
+        assert!(kitty_config.output_command.is_some());
+    }
+
+    #[test]
+    fn test_full_config_file_parsing() {
+        let toml_str = r##"
+            [daemon]
+            model = "base"
+            silence-duration = 2.5
+
+            [client]
+            source = "my-microphone"
+
+            [kitty]
+            base-background-color = "#202020"
+        "##;
+
+        let config_file: ConfigFile = toml::from_str(toml_str).unwrap();
+        assert_eq!(config_file.daemon.model, "base");
+        assert_eq!(config_file.daemon.silence_duration, 2.5);
+        assert_eq!(
+            config_file.client.source,
+            Some("my-microphone".to_string())
+        );
+        assert_eq!(config_file.kitty.base_background_color, "#202020");
+    }
 }

@@ -449,4 +449,90 @@ mod tests {
         let sources = introspector.list_sources().expect("Failed to list sources");
         assert!(sources.is_empty() || !sources.is_empty());
     }
+
+    #[test]
+    fn test_calculate_rms_empty() {
+        let samples: Vec<f32> = vec![];
+        let rms = calculate_rms(&samples);
+        assert_eq!(rms, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_rms_silence() {
+        let samples = vec![0.0; 100];
+        let rms = calculate_rms(&samples);
+        assert_eq!(rms, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_rms_known_values() {
+        // For samples [1.0, -1.0], RMS = sqrt((1 + 1) / 2) = 1.0
+        let samples = vec![1.0, -1.0];
+        let rms = calculate_rms(&samples);
+        assert!((rms - 1.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn test_vad_state_transitions() {
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+
+        // Idle + no speech = Idle
+        let result = vad.process_chunk(0.005, VadState::Idle, 0, 0);
+        assert_eq!(result.state, VadState::Idle);
+        assert!(!result.should_stop);
+
+        // Speaking + speech = Speaking
+        let result = vad.process_chunk(0.05, VadState::Speaking, 0, 10);
+        assert_eq!(result.state, VadState::Speaking);
+        assert!(!result.should_stop);
+
+        // SilenceAfterSpeech + speech = Speaking (resume speaking)
+        let result = vad.process_chunk(0.05, VadState::SilenceAfterSpeech, 5, 10);
+        assert_eq!(result.state, VadState::Speaking);
+        assert!(!result.should_stop);
+    }
+
+    #[test]
+    fn test_vad_stop_conditions() {
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+
+        // Calculate required chunks: 1.5 seconds * 16000 Hz / 1024 samples = ~23 chunks
+        let stop_chunks = 25; // More than threshold
+        let min_speech_chunks = 10; // Minimum speech met
+
+        // Should stop: enough silence after minimum speech
+        let result = vad.process_chunk(
+            0.005,
+            VadState::SilenceAfterSpeech,
+            stop_chunks,
+            min_speech_chunks,
+        );
+        assert_eq!(result.state, VadState::SilenceAfterSpeech);
+        assert!(result.should_stop);
+
+        // Should NOT stop: not enough silence
+        let result =
+            vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, min_speech_chunks);
+        assert!(!result.should_stop);
+
+        // Should NOT stop: not enough speech
+        let result = vad.process_chunk(0.005, VadState::SilenceAfterSpeech, stop_chunks, 2);
+        assert!(!result.should_stop);
+    }
+
+    #[test]
+    fn test_vad_result_from_state() {
+        let result: VadResult = VadState::Idle.into();
+        assert_eq!(result.state, VadState::Idle);
+        assert!(!result.should_stop);
+    }
+
+    #[test]
+    fn test_vad_silence_after_speech_continues() {
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+
+        // SilenceAfterSpeech + silence = SilenceAfterSpeech
+        let result = vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, 10);
+        assert_eq!(result.state, VadState::SilenceAfterSpeech);
+    }
 }

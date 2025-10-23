@@ -91,4 +91,81 @@ mod tests {
         let (name, _hex) = palette.get_slot_color(4).unwrap();
         assert_eq!(name, "blue");
     }
+
+    #[test]
+    fn test_get_slot_color_invalid_slots() {
+        let palette = Palette::new("#1e1e2e");
+
+        // Slot 0 is invalid
+        assert!(palette.get_slot_color(0).is_none());
+
+        // Slot > 4 is invalid
+        assert!(palette.get_slot_color(5).is_none());
+        assert!(palette.get_slot_color(100).is_none());
+    }
+
+    #[test]
+    fn test_hex_to_rgb_basic() {
+        assert_eq!(hex_to_rgb("#1e1e2e"), Some((30, 30, 46)));
+        assert_eq!(hex_to_rgb("#000000"), Some((0, 0, 0)));
+        assert_eq!(hex_to_rgb("#ffffff"), Some((255, 255, 255)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_without_hash() {
+        assert_eq!(hex_to_rgb("1e1e2e"), Some((30, 30, 46)));
+        assert_eq!(hex_to_rgb("ff0000"), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_with_alpha() {
+        // Should ignore alpha channel
+        assert_eq!(hex_to_rgb("#1e1e2eff"), Some((30, 30, 46)));
+        assert_eq!(hex_to_rgb("#ff000080"), Some((255, 0, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_invalid() {
+        assert_eq!(hex_to_rgb("invalid"), None);
+        assert_eq!(hex_to_rgb("#fff"), None); // Too short
+        assert_eq!(hex_to_rgb("#gggggg"), None); // Invalid hex chars
+        assert_eq!(hex_to_rgb(""), None);
+    }
+
+    #[test]
+    fn test_tint_color_basic() {
+        // Base: #1e1e2e (30, 30, 46)
+        // Add red: (30+16, 30, 46) = (46, 30, 46) = #2e1e2e
+        let result = tint_color("#1e1e2e", 16, 0, 0);
+        assert_eq!(result, "#2e1e2e");
+    }
+
+    #[test]
+    fn test_tint_color_clamping() {
+        // Test upper clamp: #ffffff + (10, 10, 10) should clamp to #ffffff
+        let result = tint_color("#ffffff", 10, 10, 10);
+        assert_eq!(result, "#ffffff");
+
+        // Test lower clamp: #000000 + (-10, -10, -10) should clamp to #000000
+        let result = tint_color("#000000", -10, -10, -10);
+        assert_eq!(result, "#000000");
+    }
+
+    #[test]
+    fn test_tint_color_invalid_base() {
+        // Invalid base should fall back to (30, 30, 46)
+        let result = tint_color("invalid", 16, 0, 0);
+        assert_eq!(result, "#2e1e2e"); // (30+16, 30, 46)
+    }
+
+    #[test]
+    fn test_palette_tinted_colors() {
+        let palette = Palette::new("#1e1e2e");
+
+        // Get red slot color and verify it's tinted correctly
+        let (name, hex) = palette.get_slot_color(1).unwrap();
+        assert_eq!(name, "red");
+        // Base #1e1e2e (30,30,46) + red tint (16,0,0) = #2e1e2e
+        assert_eq!(hex, "#2e1e2e");
+    }
 }
