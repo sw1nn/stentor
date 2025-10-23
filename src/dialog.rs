@@ -5,6 +5,90 @@ use gtk4::{
 };
 use std::sync::{Arc, Mutex};
 
+/// Helper function to send transcription to all active slots
+fn handle_send_to_all(
+    current_state: TranscriptionState,
+    destinations: &Arc<Mutex<Vec<DestinationSlot>>>,
+    text_view: &TextView,
+    on_stop_and_send: Option<&Arc<dyn Fn(usize) + Send + Sync>>,
+    on_send_text: Option<&Arc<dyn Fn(String, usize) + Send + Sync>>,
+) {
+    use TranscriptionState::*;
+
+    // Get active destinations (those with non-empty labels)
+    let dest_list = destinations.lock().unwrap();
+    let active_destinations: Vec<_> = dest_list.iter()
+        .filter(|d| !d.label.is_empty())
+        .collect();
+    let is_multi_slot = active_destinations.len() > 1;
+
+    match current_state {
+        Recording | Processing => {
+            // Stop recording and send to all active slots (or default slot 0)
+            if let Some(callback) = on_stop_and_send {
+                if is_multi_slot {
+                    for dest in active_destinations {
+                        tracing::info!("Alt+Enter: sending to slot {}", dest.slot_num);
+                        callback(dest.slot_num);
+                    }
+                } else {
+                    callback(0);
+                }
+            }
+        }
+        Reviewing => {
+            // Send text to all active slots (or default slot 0)
+            if let Some(callback) = on_send_text {
+                let buffer = text_view.buffer();
+                let text = buffer
+                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                    .to_string();
+
+                if is_multi_slot {
+                    for dest in active_destinations {
+                        tracing::info!("Alt+Enter: sending to slot {} with text: '{}'", dest.slot_num, text);
+                        callback(text.clone(), dest.slot_num);
+                    }
+                } else {
+                    callback(text, 0);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Helper function to send transcription to a specific slot
+fn handle_send_to_slot(
+    current_state: TranscriptionState,
+    slot_num: usize,
+    text_view: &TextView,
+    on_stop_and_send: Option<&Arc<dyn Fn(usize) + Send + Sync>>,
+    on_send_text: Option<&Arc<dyn Fn(String, usize) + Send + Sync>>,
+) {
+    use TranscriptionState::*;
+
+    match current_state {
+        Recording | Processing => {
+            // Stop recording and send to specific slot
+            if let Some(callback) = on_stop_and_send {
+                callback(slot_num);
+            }
+        }
+        Reviewing => {
+            // Send text to specific slot
+            if let Some(callback) = on_send_text {
+                let buffer = text_view.buffer();
+                let text = buffer
+                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
+                    .to_string();
+                callback(text, slot_num);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn slot_unicode_char(slot_num: usize) -> char {
     match slot_num {
         1 => '\u{F03A5}', // 󰎥
@@ -445,62 +529,13 @@ impl TranscriptionDialog {
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::ALT_MASK)
             {
-                use TranscriptionState::*;
-                match current_state {
-                    Recording | Processing => {
-                        // In multi-slot mode, send to all active slots; otherwise send to default (0)
-                        let dest_list = destinations.lock().unwrap();
-                        let active_destinations: Vec<_> = dest_list.iter()
-                            .filter(|d| !d.label.is_empty()) // Only active slots with labels
-                            .collect();
-
-                        if active_destinations.len() > 1 {
-                            // Multi-slot mode: stop and send to all active slots
-                            if let Some(ref callback) = on_stop_and_send {
-                                for dest in active_destinations {
-                                    tracing::info!("Alt+Enter: sending to slot {}", dest.slot_num);
-                                    callback(dest.slot_num);
-                                }
-                            }
-                        } else {
-                            // Single slot or no slots: send to default slot (0)
-                            if let Some(ref callback) = on_stop_and_send {
-                                callback(0);
-                            }
-                        }
-                    }
-                    Reviewing => {
-                        // In multi-slot mode, send to all active slots; otherwise send to default (0)
-                        let dest_list = destinations.lock().unwrap();
-                        let active_destinations: Vec<_> = dest_list.iter()
-                            .filter(|d| !d.label.is_empty()) // Only active slots with labels
-                            .collect();
-
-                        if active_destinations.len() > 1 {
-                            // Multi-slot mode: send text to all active slots
-                            if let Some(ref callback) = on_send_text {
-                                let buffer = text_view.buffer();
-                                let text = buffer
-                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                    .to_string();
-                                for dest in active_destinations {
-                                    tracing::info!("Alt+Enter: sending to slot {} with text: '{}'", dest.slot_num, text);
-                                    callback(text.clone(), dest.slot_num);
-                                }
-                            }
-                        } else {
-                            // Single slot or no slots: send to default slot (0)
-                            if let Some(ref callback) = on_send_text {
-                                let buffer = text_view.buffer();
-                                let text = buffer
-                                    .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                    .to_string();
-                                callback(text, 0);
-                            }
-                        }
-                    }
-                    _ => {}
-                }
+                handle_send_to_all(
+                    current_state,
+                    &destinations,
+                    &text_view,
+                    on_stop_and_send.as_ref(),
+                    on_send_text.as_ref(),
+                );
                 return glib::Propagation::Stop;
             }
 
@@ -536,26 +571,13 @@ impl TranscriptionDialog {
                     };
 
                     if let Some(dest) = slot_num {
-                        use TranscriptionState::*;
-                        match current_state {
-                            Recording | Processing => {
-                                // Stop recording and send to specific slot
-                                if let Some(ref callback) = on_stop_and_send {
-                                    callback(dest);
-                                }
-                            }
-                            TranscriptionState::Reviewing => {
-                                // Send text from editable view to specific slot
-                                if let Some(ref callback) = on_send_text {
-                                    let buffer = text_view.buffer();
-                                    let text = buffer
-                                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                        .to_string();
-                                    callback(text, dest);
-                                }
-                            }
-                            _ => {}
-                        }
+                        handle_send_to_slot(
+                            current_state,
+                            dest,
+                            &text_view,
+                            on_stop_and_send.as_ref(),
+                            on_send_text.as_ref(),
+                        );
                         return glib::Propagation::Stop;
                     }
                 }
@@ -602,26 +624,13 @@ impl TranscriptionDialog {
             if (keyval == gdk::Key::Return || keyval == gdk::Key::KP_Enter)
                 && modifiers.contains(gdk::ModifierType::ALT_MASK)
             {
-                use TranscriptionState::*;
-                match current_state {
-                    Recording | Processing => {
-                        // Stop recording and send to default slot (0)
-                        if let Some(ref callback) = on_stop_and_send_clone {
-                            callback(0);
-                        }
-                    }
-                    TranscriptionState::Reviewing => {
-                        // Send text from editable view
-                        if let Some(ref callback) = on_send_text {
-                            let buffer = text_view_clone.buffer();
-                            let text = buffer
-                                .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                .to_string();
-                            callback(text, 0);
-                        }
-                    }
-                    _ => {}
-                }
+                handle_send_to_all(
+                    current_state,
+                    &destinations_clone,
+                    &text_view_clone,
+                    on_stop_and_send_clone.as_ref(),
+                    on_send_text.as_ref(),
+                );
                 return glib::Propagation::Stop;
             }
 
@@ -657,26 +666,13 @@ impl TranscriptionDialog {
                     };
 
                     if let Some(dest) = slot_num {
-                        use TranscriptionState::*;
-                        match current_state {
-                            Recording | Processing => {
-                                // Stop recording and send to specific slot
-                                if let Some(ref callback) = on_stop_and_send_clone {
-                                    callback(dest);
-                                }
-                            }
-                            Reviewing => {
-                                // Send text from editable view to specific slot
-                                if let Some(ref callback) = on_send_text {
-                                    let buffer = text_view_clone.buffer();
-                                    let text = buffer
-                                        .text(&buffer.start_iter(), &buffer.end_iter(), false)
-                                        .to_string();
-                                    callback(text, dest);
-                                }
-                            }
-                            _ => {}
-                        }
+                        handle_send_to_slot(
+                            current_state,
+                            dest,
+                            &text_view_clone,
+                            on_stop_and_send_clone.as_ref(),
+                            on_send_text.as_ref(),
+                        );
                         return glib::Propagation::Stop;
                     }
                 }
