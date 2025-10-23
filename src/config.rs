@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use xdg::BaseDirectories;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigFile {
     #[serde(default)]
     pub daemon: Config,
@@ -43,8 +42,7 @@ fn default_kitty_base_background() -> String {
     "#1e1e2e".to_string()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ClientConfig {
     #[serde(default)]
     pub source: Option<String>,
@@ -52,7 +50,6 @@ pub struct ClientConfig {
     #[serde(default, alias = "multi-slot-handler")]
     pub multi_slot_handler: Option<crate::daemon::MultiSlotHandler>,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
@@ -138,7 +135,6 @@ impl ConfigFile {
         }
     }
 }
-
 
 impl ClientConfig {
     /// Load client configuration from XDG config directory
@@ -350,10 +346,7 @@ mod tests {
         let config_file: ConfigFile = toml::from_str(toml_str).unwrap();
         assert_eq!(config_file.daemon.model, "base");
         assert_eq!(config_file.daemon.silence_duration, 2.5);
-        assert_eq!(
-            config_file.client.source,
-            Some("my-microphone".to_string())
-        );
+        assert_eq!(config_file.client.source, Some("my-microphone".to_string()));
         assert_eq!(config_file.kitty.base_background_color, "#202020");
     }
 }

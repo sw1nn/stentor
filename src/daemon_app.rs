@@ -47,8 +47,7 @@ pub async fn run(
 
     // Application state (create RefCell before startup handler)
     // Use Rc<RefCell<>> for GTK widgets since all GTK operations happen on the main thread
-    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> =
-        Rc::new(RefCell::new(None));
+    let current_dialog: Rc<RefCell<Option<TranscriptionDialog>>> = Rc::new(RefCell::new(None));
 
     // Create dialog in startup handler to avoid GTK warning
     let current_dialog_for_startup = Rc::clone(&current_dialog);

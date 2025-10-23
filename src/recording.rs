@@ -203,7 +203,8 @@ pub fn start_recording_session(
                                             if segment.trim() == "[BLANK_AUDIO]" {
                                                 return;
                                             }
-                                            let mut text = full_text_clone.lock().expect("Mutex poisoned");
+                                            let mut text =
+                                                full_text_clone.lock().expect("Mutex poisoned");
                                             if !text.is_empty() && !text.ends_with(' ') {
                                                 text.push(' ');
                                             }
@@ -212,14 +213,17 @@ pub fn start_recording_session(
                                     ) {
                                         Ok(_) => {
                                             // Take ownership of text to avoid cloning twice
-                                            let complete_text = std::mem::take(&mut *full_text.lock().expect("Mutex poisoned"));
+                                            let complete_text = std::mem::take(
+                                                &mut *full_text.lock().expect("Mutex poisoned"),
+                                            );
                                             if !complete_text.is_empty() {
                                                 tracing::info!(
                                                     "Transcription complete: '{}'",
                                                     complete_text
                                                 );
                                                 // Clone once for text_accumulator, move to UI message
-                                                *text_accumulator.lock().expect("Mutex poisoned") = complete_text.clone();
+                                                *text_accumulator.lock().expect("Mutex poisoned") =
+                                                    complete_text.clone();
                                                 let _ = ui_tx_transcribe.send_blocking(
                                                     UIMessage::SetTextPreview(complete_text),
                                                 );
@@ -302,9 +306,13 @@ pub fn start_recording_session(
                                     slot,
                                     cleaned
                                 );
-                                let _ = ui_tx.send_blocking(UIMessage::AutoSendText(cleaned.clone(), *slot));
+                                let _ = ui_tx
+                                    .send_blocking(UIMessage::AutoSendText(cleaned.clone(), *slot));
                             }
-                            tracing::info!("AutoSendText messages sent to {} slots", auto_slots.len());
+                            tracing::info!(
+                                "AutoSendText messages sent to {} slots",
+                                auto_slots.len()
+                            );
                             // Send Close message after all AutoSendText messages to cleanup and hide dialog
                             let _ = ui_tx.send_blocking(UIMessage::Close);
                         } else {
@@ -349,7 +357,10 @@ pub fn start_recording_session(
             );
             let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text.clone(), *slot));
         }
-        tracing::info!("AutoSendText messages sent to {} slots (from accumulated text)", auto_slots.len());
+        tracing::info!(
+            "AutoSendText messages sent to {} slots (from accumulated text)",
+            auto_slots.len()
+        );
         // Send Close message after all AutoSendText messages to cleanup and hide dialog
         let _ = ui_tx.send_blocking(UIMessage::Close);
     } else {

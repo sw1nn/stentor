@@ -275,10 +275,11 @@ pub fn find_available_slot() -> Result<Option<usize>> {
                             if let Some(env) = window.get("env").and_then(|e| e.as_object())
                                 && let Some(slot_str) =
                                     env.get("STENTOR_SLOT").and_then(|v| v.as_str())
-                                    && let Ok(slot_num) = slot_str.parse::<usize>()
-                                        && (1..=8).contains(&slot_num) {
-                                            occupied_slots.insert(slot_num);
-                                        }
+                                && let Ok(slot_num) = slot_str.parse::<usize>()
+                                && (1..=8).contains(&slot_num)
+                            {
+                                occupied_slots.insert(slot_num);
+                            }
                         }
                     }
                 }
@@ -520,30 +521,32 @@ fn parse_worktree_label(cwd: &str) -> String {
         .output();
 
     if let Ok(output) = branch_output
-        && output.status.success() {
-            let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-            if !branch.is_empty() {
-                // Get the remote origin URL
-                let origin_output = std::process::Command::new("git")
-                    .arg("-C")
-                    .arg(cwd)
-                    .arg("remote")
-                    .arg("get-url")
-                    .arg("origin")
-                    .output();
+        && output.status.success()
+    {
+        let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !branch.is_empty() {
+            // Get the remote origin URL
+            let origin_output = std::process::Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .arg("remote")
+                .arg("get-url")
+                .arg("origin")
+                .output();
 
-                if let Ok(origin) = origin_output
-                    && origin.status.success() {
-                        let origin_url = String::from_utf8_lossy(&origin.stdout).trim().to_string();
-                        // Extract repo name from URL (last segment, without .git)
-                        if let Some(repo_name) = origin_url.split('/').next_back() {
-                            let repo_name = repo_name.trim_end_matches(".git");
-                            // Return multi-line label: repo name on first line, branch on second
-                            return format!("{}\n{}", repo_name, branch);
-                        }
-                    }
+            if let Ok(origin) = origin_output
+                && origin.status.success()
+            {
+                let origin_url = String::from_utf8_lossy(&origin.stdout).trim().to_string();
+                // Extract repo name from URL (last segment, without .git)
+                if let Some(repo_name) = origin_url.split('/').next_back() {
+                    let repo_name = repo_name.trim_end_matches(".git");
+                    // Return multi-line label: repo name on first line, branch on second
+                    return format!("{}\n{}", repo_name, branch);
+                }
             }
         }
+    }
 
     // Fall back to last directory component
     cwd.split('/').next_back().unwrap_or(cwd).to_string()

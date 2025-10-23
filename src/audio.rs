@@ -74,9 +74,10 @@ impl PulseIntrospector {
         introspect.get_source_info_list(move |result| match result {
             ListResult::Item(source_info) => {
                 if let Some(source_name) = source_info.name.as_ref()
-                    && source_name.as_ref() == target_name.as_str() {
-                        *found_clone.borrow_mut() = true;
-                    }
+                    && source_name.as_ref() == target_name.as_str()
+                {
+                    *found_clone.borrow_mut() = true;
+                }
             }
             ListResult::End | ListResult::Error => {}
         });
@@ -96,9 +97,10 @@ impl PulseIntrospector {
         let introspector = self.context.introspect();
         introspector.get_source_info_by_name(source_name, move |list_result| {
             if let ListResult::Item(source_info) = list_result
-                && let Some(desc) = source_info.description.as_ref() {
-                    *desc_result_clone.lock().expect("Mutex poisoned") = Some(desc.to_string());
-                }
+                && let Some(desc) = source_info.description.as_ref()
+            {
+                *desc_result_clone.lock().expect("Mutex poisoned") = Some(desc.to_string());
+            }
         });
 
         self.mainloop.unlock();
@@ -283,10 +285,11 @@ impl AudioRecorder {
             loop {
                 // Check for stop command
                 if let Ok(rx) = cmd_rx.lock()
-                    && let Ok(RecordingCommand::Stop) = rx.try_recv() {
-                        tracing::info!("Stop command received in audio thread");
-                        break;
-                    }
+                    && let Ok(RecordingCommand::Stop) = rx.try_recv()
+                {
+                    tracing::info!("Stop command received in audio thread");
+                    break;
+                }
 
                 // Read audio data (this blocks until data is available)
                 match simple.read(&mut buffer) {
@@ -511,8 +514,7 @@ mod tests {
         assert!(result.should_stop);
 
         // Should NOT stop: not enough silence
-        let result =
-            vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, min_speech_chunks);
+        let result = vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, min_speech_chunks);
         assert!(!result.should_stop);
 
         // Should NOT stop: not enough speech

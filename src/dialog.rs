@@ -267,8 +267,6 @@ impl TranscriptionDialog {
 
         window.set_child(Some(&main_box));
 
-        
-
         Self {
             window,
             state: Arc::new(Mutex::new(TranscriptionState::Idle)),
