@@ -728,3 +728,246 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // Tests for hex_to_rgb
+    #[test]
+    fn test_hex_to_rgb_valid() {
+        assert_eq!(hex_to_rgb("#ff0000"), Some((255, 0, 0)));
+        assert_eq!(hex_to_rgb("#00ff00"), Some((0, 255, 0)));
+        assert_eq!(hex_to_rgb("#0000ff"), Some((0, 0, 255)));
+        assert_eq!(hex_to_rgb("#ffffff"), Some((255, 255, 255)));
+        assert_eq!(hex_to_rgb("#000000"), Some((0, 0, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_without_hash() {
+        assert_eq!(hex_to_rgb("ff0000"), Some((255, 0, 0)));
+        assert_eq!(hex_to_rgb("00ff00"), Some((0, 255, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_with_alpha() {
+        // Should ignore alpha channel
+        assert_eq!(hex_to_rgb("#ff0000ff"), Some((255, 0, 0)));
+        assert_eq!(hex_to_rgb("#00ff0080"), Some((0, 255, 0)));
+    }
+
+    #[test]
+    fn test_hex_to_rgb_invalid() {
+        assert_eq!(hex_to_rgb("#ff00"), None); // Too short
+        assert_eq!(hex_to_rgb("#ff00000"), None); // 7 chars (invalid)
+        assert_eq!(hex_to_rgb("#gggggg"), None); // Invalid hex
+        assert_eq!(hex_to_rgb(""), None); // Empty
+    }
+
+    #[test]
+    fn test_hex_to_rgb_mixed_case() {
+        assert_eq!(hex_to_rgb("#FF0000"), Some((255, 0, 0)));
+        assert_eq!(hex_to_rgb("#AbCdEf"), Some((171, 205, 239)));
+    }
+
+    // Tests for get_contrast_color
+    #[test]
+    fn test_get_contrast_color_light_background() {
+        // Light backgrounds should get black text
+        let (r, g, b) = get_contrast_color("#ffffff");
+        assert_eq!((r, g, b), (0, 0, 0));
+
+        let (r, g, b) = get_contrast_color("#f0f0f0");
+        assert_eq!((r, g, b), (0, 0, 0));
+    }
+
+    #[test]
+    fn test_get_contrast_color_dark_background() {
+        // Dark backgrounds should get white text
+        let (r, g, b) = get_contrast_color("#000000");
+        assert_eq!((r, g, b), (255, 255, 255));
+
+        let (r, g, b) = get_contrast_color("#1e1e2e");
+        assert_eq!((r, g, b), (255, 255, 255));
+    }
+
+    #[test]
+    fn test_get_contrast_color_invalid_hex() {
+        // Invalid hex falls back to (128, 128, 128) which has brightness ~0.5 -> white text
+        let (r, g, b) = get_contrast_color("invalid");
+        assert_eq!((r, g, b), (255, 255, 255));
+    }
+
+    // Tests for rgb_to_int
+    #[test]
+    fn test_rgb_to_int() {
+        assert_eq!(rgb_to_int(255, 0, 0), 0xff0000);
+        assert_eq!(rgb_to_int(0, 255, 0), 0x00ff00);
+        assert_eq!(rgb_to_int(0, 0, 255), 0x0000ff);
+        assert_eq!(rgb_to_int(255, 255, 255), 0xffffff);
+        assert_eq!(rgb_to_int(0, 0, 0), 0x000000);
+        assert_eq!(rgb_to_int(171, 205, 239), 0xabcdef);
+    }
+
+    // Tests for get_kitty_socket_name
+    #[test]
+    fn test_get_kitty_socket_name_with_env() {
+        unsafe {
+            std::env::set_var("KITTY_LISTEN_ON", "unix:/tmp/test.sock");
+        }
+        let result = get_kitty_socket_name();
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "/tmp/test.sock");
+        unsafe {
+            std::env::remove_var("KITTY_LISTEN_ON");
+        }
+    }
+
+    #[test]
+    fn test_get_kitty_socket_name_without_prefix() {
+        unsafe {
+            std::env::set_var("KITTY_LISTEN_ON", "/tmp/test.sock");
+        }
+        let result = get_kitty_socket_name();
+        assert!(result.is_ok());
+        // Without "unix:" prefix, it falls back to default "kitty"
+        assert_eq!(result.unwrap(), "kitty");
+        unsafe {
+            std::env::remove_var("KITTY_LISTEN_ON");
+        }
+    }
+
+    #[test]
+    fn test_get_kitty_socket_name_missing_env() {
+        // Don't remove the env var - just check the default behavior
+        // when KITTY_LISTEN_ON is not set or doesn't match expected patterns
+        let result = get_kitty_socket_name();
+        // Should return default "kitty" when env var is not properly formatted
+        assert!(result.is_ok());
+    }
+
+    // Tests for find_stentor_windows
+    #[test]
+    fn test_find_stentor_windows_empty() {
+        let data = json!([]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 0);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_no_stentor() {
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {}
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 0);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_with_stentor() {
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {
+                            "STENTOR_SLOT": "1"
+                        }
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 1);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_with_slot() {
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {
+                            "STENTOR_SLOT": "3"
+                        }
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 3);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_multiple() {
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 1,
+                            "cwd": "/home/first",
+                            "env": {
+                                "STENTOR_SLOT": "1"
+                            }
+                        },
+                        {
+                            "id": 2,
+                            "cwd": "/home/normal",
+                            "env": {}
+                        },
+                        {
+                            "id": 3,
+                            "cwd": "/home/second",
+                            "env": {
+                                "STENTOR_SLOT": "2"
+                            }
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 2);
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 1);
+        assert_eq!(windows[1].id, 3);
+        assert_eq!(windows[1].slot_num, 2);
+    }
+
+    #[test]
+    fn test_find_stentor_windows_invalid_json_structure() {
+        // Missing required fields should be skipped gracefully
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "cwd": "/home/test",
+                        "env": {
+                            "STENTOR_SLOT": "1"
+                        }
+                        // missing id
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data);
+        assert_eq!(windows.len(), 0);
+    }
+}
