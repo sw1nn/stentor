@@ -10,10 +10,8 @@ depends=('gtk4' 'libadwaita' 'alsa-lib')
 makedepends=('cargo' 'git')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription' 'sw1nn-transcription-git')
-source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/stentor.git#tag=v$pkgver"
-  "stentor.service")
-sha256sums=('SKIP'
-  '7f6bbf0d1cc7f2426395e31189db911dd51555738fe82b1dd3ec99f52c723392')
+source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/stentor.git#tag=v$pkgver")
+sha256sums=('SKIP')
 
 prepare() {
   cd "$srcdir/$pkgname"
@@ -50,7 +48,7 @@ package() {
   install -Dm755 "target/release/stentorctl" "$pkgdir/usr/bin/stentorctl"
 
   # Install systemd user service
-  install -Dm644 "$srcdir/stentor.service" "$pkgdir/usr/lib/systemd/user/stentor.service"
+  install -Dm644 "$srcdir/$pkgname/assets/stentor.service" "$pkgdir/usr/lib/systemd/user/stentor.service"
 
   # Install sample config
   install -Dm644 "config.toml.sample" "$pkgdir/usr/share/doc/$pkgname/config.toml.sample"
