@@ -28,6 +28,8 @@ build() {
   # Remove system LTO flags that interfere with whisper's native compilation
   export CFLAGS="${CFLAGS//-flto=auto/}"
   export CXXFLAGS="${CXXFLAGS//-flto=auto/}"
+  # Remap source paths to avoid $srcdir references in binaries
+  export RUSTFLAGS="--remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
 
   cargo build --frozen --release
 }
