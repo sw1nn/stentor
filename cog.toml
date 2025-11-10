@@ -1,0 +1,25 @@
+# Cocogitto configuration for stentor
+from_latest_tag = false
+ignore_merge_commits = true
+ignore_fixup_commits = true
+disable_changelog = false
+disable_bump_commit = false
+
+# Tag prefix for version tags
+tag_prefix = "v"
+
+# Pre-bump hooks run before creating the version commit
+# These update the PKGBUILD with the new version and reset pkgrel
+pre_bump_hooks = [
+  "sed -i 's/^pkgver=.*/pkgver={{version}}/' packaging/arch/PKGBUILD",
+  "sed -i 's/^pkgrel=.*/pkgrel=1/' packaging/arch/PKGBUILD",
+  "git add packaging/arch/PKGBUILD",
+]
+
+# Post-bump hooks run after the version commit and tag are created
+post_bump_hooks = [
+  "git push",
+  "git push origin v{{version}}",
+  "makepkg -D packaging/arch --sign",
+  "sw1nn-pkg-upload packaging/arch/stentor-{{version}}-1.tar.zst packaging/arch/stentor-debug-{{version}}-1.tar.zst",
+]
