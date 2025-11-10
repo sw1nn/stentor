@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.23.1 - 2025-11-10
+#### Bug Fixes
+- use wildcard for architecture in package upload path - (7017ac6) - Neale Swinnerton
+#### Miscellaneous Chores
+- ignore package signature files in packaging/arch - (f24ca38) - Neale Swinnerton
+
+- - -
+
 ## v0.23.0 - 2025-11-10
 #### Miscellaneous Chores
 - add cocogitto configuration for automated releases - (833695b) - Neale Swinnerton
