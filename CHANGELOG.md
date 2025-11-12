@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.24.0 - 2025-11-12
+#### Miscellaneous Chores
+- (**build**) standardize cog.toml pre_bump_hooks for Cargo - (213ef5b) - Neale Swinnerton
+
+- - -
+
 ## v0.23.1 - 2025-11-10
 #### Bug Fixes
 - use wildcard for architecture in package upload path - (7017ac6) - Neale Swinnerton
