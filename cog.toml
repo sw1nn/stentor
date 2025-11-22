@@ -1,4 +1,4 @@
-# Cocogitto configuration for stentor
+# Cocogitto configuration for sw1nn-bin-rs
 from_latest_tag = false
 ignore_merge_commits = true
 ignore_fixup_commits = true
@@ -22,6 +22,6 @@ pre_bump_hooks = [
 post_bump_hooks = [
   "git push",
   "git push origin v{{version}}",
-  "makepkg -D packaging/arch --sign",
-  "sw1nn-pkg-upload packaging/arch/stentor-{{version}}-1-*.pkg.tar.zst",
+  "sudo sw1nn-makepkg-chroot -C packaging/arch",
+  "sw1nn-pkg-upload packaging/arch/*-{{version}}-*.pkg.tar.zst",
 ]
