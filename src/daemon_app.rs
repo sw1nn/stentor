@@ -177,9 +177,12 @@ pub async fn run(
                         let recording_active_for_ui = Arc::clone(&recording_active_clone);
                         let stop_tx_for_cleanup = Arc::clone(&current_stop_tx_clone);
                         let output_command_for_auto_send = output_command.clone();
-                        let kitty_window_ids: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
-                        let kitty_window_ids_clone = Rc::clone(&kitty_window_ids);
-                        let kitty_window_ids_for_send_callback = Rc::clone(&kitty_window_ids);
+                        // Window IDs are set once when Kitty windows are discovered, then only read on escape/send.
+                        // Arc<Mutex> has negligible overhead: one write at discovery, few reads at user action,
+                        // and no hot path contention. The Mutex cost is nothing compared to the actual cleanup
+                        // work (IPC calls to reset Kitty window colors).
+                        let kitty_window_ids: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
+                        let kitty_window_ids_for_callbacks = Arc::clone(&kitty_window_ids);
                         let handler_for_close = handler.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
@@ -205,7 +208,7 @@ pub async fn run(
                                     }
                                     StoreHandlerWindowIds(window_ids) => {
                                         tracing::info!("Storing {} handler window IDs for cleanup", window_ids.len());
-                                        *kitty_window_ids.borrow_mut() = window_ids;
+                                        *kitty_window_ids.lock().expect("Mutex poisoned") = window_ids;
                                     }
                                     CloseImmediately => {
                                         tracing::info!("Hiding dialog immediately (background processing will continue)");
@@ -244,7 +247,7 @@ pub async fn run(
 
                                         // Cleanup handler if present
                                         if let Some(ref h) = handler_for_close {
-                                            let window_ids = kitty_window_ids_clone.borrow().clone();
+                                            let window_ids = kitty_window_ids.lock().expect("Mutex poisoned").clone();
                                             if let Err(e) = h.cleanup(window_ids) {
                                                 tracing::error!("Handler cleanup failed: {}", e);
                                             }
@@ -270,18 +273,45 @@ pub async fn run(
                             let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
 
                             let stop_tx_clone = Arc::clone(&current_stop_tx_clone);
+                            let ui_tx_for_manual_stop = ui_tx.clone();
+                            let handler_for_manual_stop = handler.clone();
+                            let kitty_window_ids_for_manual_stop = Arc::clone(&kitty_window_ids_for_callbacks);
                             dialog.set_on_manual_stop(move || {
-                                tracing::info!("Manual stop requested");
-                                let stop_tx_lock = stop_tx_clone.lock().expect("Mutex poisoned");
-                                if let Some(ref tx) = *stop_tx_lock {
-                                    let _ = tx.send(RecordingCommand::Stop);
-                                }
+                                tracing::info!("Manual stop requested - closing immediately");
+                                // Hide dialog immediately for responsive UX
+                                let _ = ui_tx_for_manual_stop.send_blocking(UIMessage::CloseImmediately);
+
+                                // Clone window_ids now (at invocation time, not setup time)
+                                let window_ids = kitty_window_ids_for_manual_stop.lock().expect("Mutex poisoned").clone();
+
+                                // Do cleanup in background
+                                let stop_tx = Arc::clone(&stop_tx_clone);
+                                let handler = handler_for_manual_stop.clone();
+                                let ui_tx_close = ui_tx_for_manual_stop.clone();
+                                std::thread::spawn(move || {
+                                    // Stop recording thread
+                                    let stop_tx_lock = stop_tx.lock().expect("Mutex poisoned");
+                                    if let Some(ref tx) = *stop_tx_lock {
+                                        let _ = tx.send(RecordingCommand::Stop);
+                                    }
+                                    drop(stop_tx_lock);
+
+                                    // Cleanup handler (e.g., reset Kitty window colors)
+                                    if let Some(ref h) = handler
+                                        && let Err(e) = h.cleanup(window_ids)
+                                    {
+                                        tracing::error!("Handler cleanup failed: {}", e);
+                                    }
+
+                                    // Finalize close
+                                    let _ = ui_tx_close.send_blocking(UIMessage::Close);
+                                });
                             });
 
                             let output_command_for_send = output_command.clone();
                             let ui_tx_for_close = ui_tx.clone();
                             let handler_for_send = handler.clone();
-                            let kitty_window_ids_for_send = kitty_window_ids_for_send_callback.borrow().clone();
+                            let kitty_window_ids_for_send = Arc::clone(&kitty_window_ids_for_callbacks);
                             dialog.set_on_send_text(move |text, dest_num| {
                                 tracing::info!("Sending text to destination {}: {}", dest_num, text);
 
@@ -289,10 +319,12 @@ pub async fn run(
                                 tracing::info!("Closing dialog immediately (output command continues in background)");
                                 let _ = ui_tx_for_close.send_blocking(UIMessage::CloseImmediately);
 
+                                // Clone window_ids now (at invocation time, not setup time)
+                                let window_ids = kitty_window_ids_for_send.lock().expect("Mutex poisoned").clone();
+
                                 // Execute output command and cleanup in background
                                 let cmd_str = output_command_for_send.clone();
                                 let handler = handler_for_send.clone();
-                                let window_ids = kitty_window_ids_for_send.clone();
                                 let ui_tx_close = ui_tx_for_close.clone();
                                 std::thread::spawn(move || {
                                     if let Some(ref cmd) = cmd_str {
@@ -303,9 +335,10 @@ pub async fn run(
 
                                     // Cleanup handler in background
                                     if let Some(ref h) = handler
-                                        && let Err(e) = h.cleanup(window_ids) {
-                                            tracing::error!("Handler cleanup failed: {}", e);
-                                        }
+                                        && let Err(e) = h.cleanup(window_ids)
+                                    {
+                                        tracing::error!("Handler cleanup failed: {}", e);
+                                    }
 
                                     // Send final Close after background processing
                                     let _ = ui_tx_close.send_blocking(UIMessage::Close);
@@ -313,9 +346,39 @@ pub async fn run(
                             });
 
                             let ui_tx_for_cancel = ui_tx.clone();
+                            let handler_for_cancel = handler.clone();
+                            let kitty_window_ids_for_cancel = Arc::clone(&kitty_window_ids_for_callbacks);
+                            let stop_tx_for_cancel = Arc::clone(&current_stop_tx_clone);
                             dialog.set_on_cancel(move || {
-                                tracing::info!("Cancelled");
-                                let _ = ui_tx_for_cancel.send_blocking(UIMessage::Close);
+                                tracing::info!("Cancelled - closing immediately");
+                                // Hide dialog immediately for responsive UX
+                                let _ = ui_tx_for_cancel.send_blocking(UIMessage::CloseImmediately);
+
+                                // Clone window_ids now (at invocation time, not setup time)
+                                let window_ids = kitty_window_ids_for_cancel.lock().expect("Mutex poisoned").clone();
+
+                                // Do cleanup in background
+                                let handler = handler_for_cancel.clone();
+                                let stop_tx = Arc::clone(&stop_tx_for_cancel);
+                                let ui_tx_close = ui_tx_for_cancel.clone();
+                                std::thread::spawn(move || {
+                                    // Stop recording thread if running
+                                    let stop_tx_lock = stop_tx.lock().expect("Mutex poisoned");
+                                    if let Some(ref tx) = *stop_tx_lock {
+                                        let _ = tx.send(RecordingCommand::Stop);
+                                    }
+                                    drop(stop_tx_lock);
+
+                                    // Cleanup handler (e.g., reset Kitty window colors)
+                                    if let Some(ref h) = handler
+                                        && let Err(e) = h.cleanup(window_ids)
+                                    {
+                                        tracing::error!("Handler cleanup failed: {}", e);
+                                    }
+
+                                    // Finalize close
+                                    let _ = ui_tx_close.send_blocking(UIMessage::Close);
+                                });
                             });
 
                             let stop_tx_clone2 = Arc::clone(&current_stop_tx_clone);

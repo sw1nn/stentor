@@ -252,7 +252,7 @@ pub fn start_recording_session(
                                                         current_confirmed_text.push(' ');
                                                     }
                                                     current_confirmed_text.push_str(&cleaned);
-                                                    tracing::info!(
+                                                    tracing::debug!(
                                                         confirmed = %current_confirmed_text,
                                                         "Window confirmed"
                                                     );
@@ -347,7 +347,7 @@ pub fn start_recording_session(
                                 } else {
                                     "periodic"
                                 };
-                                tracing::info!(
+                                tracing::debug!(
                                     total_chunks,
                                     settled_chunks,
                                     current_confirmed,
@@ -390,7 +390,7 @@ pub fn start_recording_session(
                                                         current_confirmed_text.push(' ');
                                                     }
                                                     current_confirmed_text.push_str(&cleaned);
-                                                    tracing::info!(
+                                                    tracing::debug!(
                                                         confirmed = %current_confirmed_text,
                                                         "Window confirmed"
                                                     );
@@ -499,7 +499,7 @@ pub fn start_recording_session(
             .copied()
             .collect();
 
-        tracing::info!(
+        tracing::debug!(
             remaining_chunks = recorded_audio.len() - current_confirmed_idx,
             "Transcribing remaining unconfirmed audio"
         );
