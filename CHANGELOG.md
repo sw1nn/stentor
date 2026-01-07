@@ -2,6 +2,20 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.26.1 - 2026-01-07
+#### Bug Fixes
+- (**daemon**) fix race condition in recording_active flag - (1b12f1a) - Neale Swinnerton
+- (**kitty**) pass KITTY_LISTEN_ON to output commands - (9c3eba1) - Neale Swinnerton
+- (**recording**) wait for in-flight transcription before final read - (85d3f0a) - Neale Swinnerton
+#### Tests
+- (**recording**) add integration tests for transcription completeness - (163fd23) - Neale Swinnerton
+#### Refactoring
+- improve API ergonomics with generic trait bounds - (5bc8dd1) - Neale Swinnerton
+- extract magic numbers to constants module - (fdf6fab) - Neale Swinnerton
+- migrate from std::sync::Mutex to parking_lot::Mutex - (ca02ae4) - Neale Swinnerton
+
+- - -
+
 ## v0.26.0 - 2026-01-07
 #### Miscellaneous Chores
 - (**deps**) update makedepends - (8427229) - Neale Swinnerton
