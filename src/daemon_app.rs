@@ -195,6 +195,10 @@ pub async fn run(
                                     SetTextPreview(text) => {
                                         dialog_for_updates.set_text_preview(&text);
                                     }
+                                    SetConfirmedAndPreview(confirmed, preview) => {
+                                        dialog_for_updates
+                                            .set_confirmed_and_preview(&confirmed, &preview);
+                                    }
                                     SetDestinations(destinations) => {
                                         tracing::info!("Updating destinations with {} slots", destinations.len());
                                         dialog_for_updates.set_destinations(&destinations);

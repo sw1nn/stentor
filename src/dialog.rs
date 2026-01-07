@@ -767,6 +767,24 @@ impl TranscriptionDialog {
             .set_markup(&format!("<span foreground='#888888'>{escaped}</span>"));
     }
 
+    pub fn set_confirmed_and_preview(&self, confirmed: &str, preview: &str) {
+        // Show confirmed text in white, preview text in gray
+        let confirmed_escaped = glib::markup_escape_text(confirmed);
+        let preview_escaped = glib::markup_escape_text(preview);
+
+        let markup = if confirmed.is_empty() {
+            format!("<span foreground='#888888'>{preview_escaped}</span>")
+        } else if preview.is_empty() {
+            confirmed_escaped.to_string()
+        } else {
+            format!(
+                "{confirmed_escaped} <span foreground='#888888'>{preview_escaped}</span>"
+            )
+        };
+
+        self.text_preview.set_markup(&markup);
+    }
+
     pub fn set_transcribed_text(&self, text: &str) {
         let buffer = self.text_view.buffer();
         buffer.set_text(text);
