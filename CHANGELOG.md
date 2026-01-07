@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.26.2 - 2026-01-07
+#### Bug Fixes
+- (**dialog**) send to active slot when only one exists - (e2bd0a2) - Neale Swinnerton
+
+- - -
+
 ## v0.26.1 - 2026-01-07
 #### Bug Fixes
 - (**daemon**) fix race condition in recording_active flag - (1b12f1a) - Neale Swinnerton
