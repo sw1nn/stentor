@@ -17,7 +17,7 @@ fn handle_send_to_all(
     // Get active destinations (those with non-empty labels)
     let dest_list = destinations.lock();
     let active_destinations: Vec<_> = dest_list.iter().filter(|d| !d.label.is_empty()).collect();
-    let is_multi_slot = active_destinations.len() > 1;
+    let is_multi_slot = !active_destinations.is_empty();
 
     use TranscriptionState::*;
     match current_state {
