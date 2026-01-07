@@ -237,6 +237,52 @@ stentord --model large --language auto --silence-duration 3.0
 | `--silence-duration` | Override silence duration |
 | `-q, --quiet` | Disable logging output |
 
+## Performance
+
+### GPU Acceleration (Critical for Real-Time Use)
+
+Stentor uses Whisper for speech recognition, which is computationally intensive. **GPU acceleration is essential for acceptable real-time performance.** Without it, transcription will be slow and laggy.
+
+The default build enables Vulkan (GPU) and OpenMP (multi-threaded CPU) acceleration:
+
+```toml
+# In Cargo.toml
+whisper-rs = { version = "0.15", features = ["vulkan", "openmp"] }
+```
+
+#### Performance Impact
+
+Profiling shows the dramatic difference GPU offloading makes:
+
+| Metric | CPU Only | Vulkan + OpenMP | Improvement |
+|--------|----------|-----------------|-------------|
+| CPU Samples | 18K | 1K | 18x fewer |
+| CPU Cycles | 689 billion | 14.5 billion | **47x fewer** |
+| Hotspot | `ggml_vec_dot_f16` (80%) | `ggml_vk_wait_for_fence` (54%) | GPU offload |
+
+With GPU acceleration, the CPU spends most of its time waiting for the GPU rather than doing compute. The heavy matrix operations run on your graphics card.
+
+#### Supported Backends
+
+| Feature | Backend | Use Case |
+|---------|---------|----------|
+| `vulkan` | Vulkan API | AMD, Intel, NVIDIA (recommended for AMD) |
+| `cuda` | NVIDIA CUDA | NVIDIA GPUs |
+| `metal` | Apple Metal | macOS |
+| `openblas` | OpenBLAS | Optimized CPU BLAS |
+| `openmp` | OpenMP | Multi-threaded CPU |
+
+#### Verifying GPU Acceleration
+
+Check that Vulkan is being used:
+
+```bash
+# Should show libvulkan linked
+ldd $(which stentord) | grep vulkan
+```
+
+In the logs, you should see Vulkan initialization messages when the daemon starts.
+
 ## Troubleshooting
 
 ### Check logs
@@ -261,7 +307,9 @@ pactl list sources short
 
 ### Transcription too slow
 
-Try a smaller model:
+First, ensure GPU acceleration is enabled (see [Performance](#performance) section). Without GPU offloading, transcription will be very slow.
+
+If GPU is enabled and still slow, try a smaller model:
 
 ```toml
 [daemon]
