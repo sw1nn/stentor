@@ -96,12 +96,9 @@ pub async fn run(
             use DaemonCommand::*;
             match command {
                 Start { unmute_source, source, multi_slot_handler } => {
-                    // Atomically check if recording is active and set it to true if not
-                    // This prevents race conditions where multiple Start commands arrive concurrently
-                    if recording_active_clone
-                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-                        .is_err()
-                    {
+                    // Check if recording is already active (don't set flag yet - do that before thread spawn)
+                    // This prevents accepting new Start commands while recording is in progress
+                    if recording_active_clone.load(Ordering::Acquire) {
                         tracing::warn!("Recording already in progress, ignoring Start command");
                         // Bring existing dialog to front if it exists
                         let dialog_ref = current_dialog_clone.borrow();
@@ -415,8 +412,6 @@ pub async fn run(
                             dialog.present();
                         } // Drop mutable borrow
 
-                        // Note: recording_active flag was already set by compare_exchange above
-
                         // Start recording in background
                         let config_clone = Arc::clone(&config_clone);
                         let transcriber_clone = Arc::clone(&transcriber_clone);
@@ -424,6 +419,11 @@ pub async fn run(
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
                         let auto_send_for_recording = Arc::clone(&auto_send_slots_clone);
                         let recording_active_for_thread = Arc::clone(&recording_active_clone);
+
+                        // Set recording_active flag now, right before spawning thread
+                        // This ensures the flag is only set when we're certain the thread will start,
+                        // avoiding a stuck state if setup fails before this point
+                        recording_active_clone.store(true, Ordering::Release);
 
                         thread::spawn(move || {
                             match start_recording_session(
