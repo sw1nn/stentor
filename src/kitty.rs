@@ -6,7 +6,8 @@ use std::env;
 use std::io::{Read, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::UnixStream;
-use std::time::Duration;
+
+use crate::constants::KITTY_SOCKET_TIMEOUT;
 
 #[derive(Serialize)]
 struct KittyCommand<T = SetColorsPayload> {
@@ -70,7 +71,7 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
     stream.flush()?;
 
     // Set read timeout
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(KITTY_SOCKET_TIMEOUT))?;
 
     // Read response
     let mut resp = Vec::new();
@@ -135,7 +136,7 @@ pub fn list_kitty_windows() -> Result<Value> {
     stream.flush()?;
     tracing::debug!("Sent ls command");
 
-    stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(KITTY_SOCKET_TIMEOUT))?;
 
     let mut resp = Vec::new();
     let mut buffer = [0u8; 4096];

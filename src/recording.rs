@@ -133,6 +133,7 @@ use std::thread;
 
 use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use crate::config::Config;
+use crate::constants::{CHUNK_RECV_TIMEOUT, ERROR_DISPLAY_DURATION};
 use crate::dialog::TranscriptionState;
 use crate::source_mute::SourceMuteManager;
 use crate::transcription::Transcriber;
@@ -271,7 +272,7 @@ pub fn start_recording_session(
     tracing::info!("Waiting for speech to begin...");
 
     loop {
-        match chunk_rx.recv_timeout(std::time::Duration::from_millis(100)) {
+        match chunk_rx.recv_timeout(CHUNK_RECV_TIMEOUT) {
             Ok(chunk) => {
                 let rms = chunk.rms;
                 tracing::trace!("Received audio chunk: RMS = {}", rms);
@@ -672,7 +673,7 @@ pub fn start_recording_session(
             "No speech detected".to_string(),
             0.0,
         ));
-        thread::sleep(std::time::Duration::from_secs(2));
+        thread::sleep(ERROR_DISPLAY_DURATION);
         let _ = ui_tx.send_blocking(UIMessage::Close);
         return Ok(());
     }
@@ -925,7 +926,8 @@ mod tests {
         let periodic_threshold = 16;
         let total_chunks = 469;
 
-        let mut sim = TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
+        let mut sim =
+            TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
         let transcribed = sim.simulate(total_chunks);
 
         // Verify all chunks are covered
@@ -1040,9 +1042,13 @@ mod tests {
             let prev_end = sim.confirmed_ranges[i - 1].1;
             let curr_start = sim.confirmed_ranges[i].0;
             assert_eq!(
-                prev_end, curr_start,
+                prev_end,
+                curr_start,
                 "Window {} should start at {} (where window {} ended), but starts at {}",
-                i, prev_end, i - 1, curr_start
+                i,
+                prev_end,
+                i - 1,
+                curr_start
             );
         }
 

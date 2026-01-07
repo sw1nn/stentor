@@ -13,6 +13,9 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::audio::{AudioRecorder, RecordingCommand};
 use crate::config::{Config, ConfigFile};
+use crate::constants::{
+    COMMAND_CHANNEL_CAPACITY, HANDLER_CHANNEL_CAPACITY, UI_MESSAGE_CHANNEL_CAPACITY,
+};
 use crate::daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
@@ -31,7 +34,8 @@ pub async fn run(
     server.bind().await?;
 
     // Channel for daemon commands
-    let (command_tx, mut command_rx) = tokio_mpsc::channel::<DaemonCommand>(32);
+    let (command_tx, mut command_rx) =
+        tokio_mpsc::channel::<DaemonCommand>(COMMAND_CHANNEL_CAPACITY);
 
     // Spawn daemon server task
     tokio::spawn(async move {
@@ -124,9 +128,8 @@ pub async fn run(
 
                         // Create UI update channel with backpressure
                         // Bounded to prevent OOM if UI thread blocks
-                        // Capacity of 128 (power of 2) allows ~8 seconds of buffering at typical message rate
-                        // and enables compiler optimization of modulo operations to bitwise AND
-                        let (ui_tx, ui_rx) = async_channel::bounded::<UIMessage>(128);
+                        let (ui_tx, ui_rx) =
+                            async_channel::bounded::<UIMessage>(UI_MESSAGE_CHANNEL_CAPACITY);
                         *current_ui_tx_clone.borrow_mut() = Some(ui_tx.clone());
 
                         // Setup multi-slot handler in background if requested
@@ -134,7 +137,8 @@ pub async fn run(
                         let handler: Option<Arc<dyn MultiSlotHandlerTrait>> = match multi_slot_handler {
                             MultiSlotHandler::Kitty => {
                                 // Create a channel for handler messages
-                                let (handler_tx, handler_rx) = async_channel::bounded::<HandlerUIMessage>(32);
+                                let (handler_tx, handler_rx) =
+                                    async_channel::bounded::<HandlerUIMessage>(HANDLER_CHANNEL_CAPACITY);
 
                                 // Bridge handler messages to UI messages
                                 let ui_tx_for_bridge = ui_tx.clone();
