@@ -1,3 +1,130 @@
+//! # Recording Module - Sliding Window Transcription Algorithm
+//!
+//! This module handles audio recording and real-time transcription using a sliding
+//! window approach that provides stable "confirmed" text and tentative "preview" text.
+//!
+//! ## Algorithm Overview
+//!
+//! The transcription uses three key parameters:
+//! - **window_chunks**: Size of the confirmation window (e.g., 5 seconds)
+//! - **lag_chunks**: How far behind we confirm audio (e.g., 1 second)
+//! - **periodic_threshold**: How often we run transcription (e.g., every 1 second)
+//!
+//! ```text
+//! Audio Timeline (chunks arriving over time):
+//!
+//! |<-------- confirmed -------->|<-- lag -->|
+//! [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14]  ← total chunks
+//!                                ^
+//!                                └── current time (chunk 14 just arrived)
+//!
+//! settled_chunks = total - lag = 14 - 3 = 11
+//! can_confirm = settled_chunks >= confirmed_idx + window_size
+//! ```
+//!
+//! ## Sliding Window State Machine
+//!
+//! ```text
+//!                    ┌─────────────────────────────────────┐
+//!                    │         Recording Session           │
+//!                    └─────────────────────────────────────┘
+//!                                    │
+//!                                    ▼
+//!                    ┌─────────────────────────────────────┐
+//!                    │  Initialize: confirmed_idx = 0      │
+//!                    │  window_size, lag, periodic set     │
+//!                    └─────────────────────────────────────┘
+//!                                    │
+//!                                    ▼
+//!          ┌─────────────────────────────────────────────────────┐
+//!          │                  For each chunk:                    │
+//!          │  1. Add chunk to recorded_audio                     │
+//!          │  2. Increment chunks_since_transcription            │
+//!          └─────────────────────────────────────────────────────┘
+//!                                    │
+//!                ┌───────────────────┴───────────────────┐
+//!                │ chunks_since_transcription            │
+//!                │      >= periodic_threshold?           │
+//!                └───────────────────┬───────────────────┘
+//!                       No │                  │ Yes
+//!                          │                  ▼
+//!                          │    ┌──────────────────────────┐
+//!                          │    │ settled = total - lag    │
+//!                          │    │ can_confirm =            │
+//!                          │    │   settled >= confirmed   │
+//!                          │    │            + window      │
+//!                          │    └──────────────────────────┘
+//!                          │                  │
+//!                          │         ┌───────┴───────┐
+//!                          │         │ can_confirm?  │
+//!                          │         └───────┬───────┘
+//!                          │       No │           │ Yes
+//!                          │          │           ▼
+//!                          │          │  ┌────────────────────────┐
+//!                          │          │  │ Transcribe window:     │
+//!                          │          │  │ [confirmed..confirmed  │
+//!                          │          │  │          +window]      │
+//!                          │          │  │ confirmed += window    │
+//!                          │          │  └────────────────────────┘
+//!                          │          │           │
+//!                          │          └─────┬─────┘
+//!                          │                ▼
+//!                          │    ┌──────────────────────────┐
+//!                          │    │ Transcribe preview:      │
+//!                          │    │ [confirmed..total]       │
+//!                          │    │ (tentative, may change)  │
+//!                          │    └──────────────────────────┘
+//!                          │                │
+//!                          └────────────────┘
+//!                                    │
+//!                                    ▼
+//!                          ┌─────────────────┐
+//!                          │  Session ends   │
+//!                          │  (silence/stop) │
+//!                          └─────────────────┘
+//!                                    │
+//!                                    ▼
+//!                    ┌─────────────────────────────────────┐
+//!                    │  Final: Transcribe remaining        │
+//!                    │  [confirmed..total] as confirmed    │
+//!                    └─────────────────────────────────────┘
+//! ```
+//!
+//! ## Example Timeline
+//!
+//! ```text
+//! Config: window=10, lag=3, periodic=5
+//!
+//! Time →
+//! Chunks:  [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15][16][17][18]
+//!
+//! At chunk 5 (periodic trigger):
+//!   total=5, settled=2, confirmed=0, can_confirm=false (2 < 0+10)
+//!   Preview: [0..5]
+//!
+//! At chunk 10:
+//!   total=10, settled=7, confirmed=0, can_confirm=false (7 < 0+10)
+//!   Preview: [0..10]
+//!
+//! At chunk 15:
+//!   total=15, settled=12, confirmed=0, can_confirm=true (12 >= 0+10)
+//!   Confirm: [0..10] → confirmed=10
+//!   Preview: [10..15]
+//!
+//! At end (chunk 18):
+//!   Remaining: [10..18] transcribed as final
+//!
+//! Result: All chunks [0..18] transcribed exactly once
+//! ```
+//!
+//! ## Guarantees
+//!
+//! The algorithm guarantees:
+//! 1. **No gaps**: Every chunk is eventually transcribed
+//! 2. **No overlaps**: No chunk is transcribed twice in confirmed output
+//! 3. **Contiguous windows**: Each confirmed window starts where the previous ended
+//! 4. **Complete coverage**: Remaining chunks at end are always transcribed
+
 use anyhow::Result;
 use async_channel::Sender;
 use parking_lot::Mutex;
@@ -605,6 +732,329 @@ pub fn execute_output_command(command_template: &str, text: &str, slot_num: usiz
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to execute command");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    /// Simulates the transcription window algorithm to verify chunk coverage.
+    ///
+    /// This tracks which chunk ranges are transcribed (confirmed) during periodic
+    /// transcription, and which are transcribed at the end (remaining).
+    struct TranscriptionWindowSimulator {
+        window_chunks: usize,
+        lag_chunks: usize,
+        periodic_threshold: usize,
+        /// Ranges of chunks that were transcribed as "confirmed" windows
+        confirmed_ranges: Vec<(usize, usize)>,
+        /// Range of chunks transcribed at the end as "remaining"
+        remaining_range: Option<(usize, usize)>,
+    }
+
+    impl TranscriptionWindowSimulator {
+        fn new(window_chunks: usize, lag_chunks: usize, periodic_threshold: usize) -> Self {
+            Self {
+                window_chunks,
+                lag_chunks,
+                periodic_threshold,
+                confirmed_ranges: Vec::new(),
+                remaining_range: None,
+            }
+        }
+
+        /// Simulates the full recording session with given total chunks.
+        /// Returns the set of all chunk indices that were transcribed.
+        fn simulate(&mut self, total_chunks: usize) -> HashSet<usize> {
+            let mut confirmed_idx = 0usize;
+            let mut chunks_since_transcription = 0usize;
+
+            // Simulate chunks arriving one at a time
+            for current_total in 1..=total_chunks {
+                chunks_since_transcription += 1;
+
+                // Check if we should run periodic transcription
+                if chunks_since_transcription >= self.periodic_threshold {
+                    chunks_since_transcription = 0;
+
+                    let settled_chunks = current_total.saturating_sub(self.lag_chunks);
+                    let can_confirm = settled_chunks >= confirmed_idx + self.window_chunks;
+
+                    if can_confirm {
+                        let window_end = confirmed_idx + self.window_chunks;
+                        self.confirmed_ranges.push((confirmed_idx, window_end));
+                        confirmed_idx = window_end;
+                    }
+                }
+            }
+
+            // At the end, transcribe remaining unconfirmed audio
+            if confirmed_idx < total_chunks {
+                self.remaining_range = Some((confirmed_idx, total_chunks));
+            }
+
+            self.get_transcribed_chunks()
+        }
+
+        /// Returns all chunk indices that were transcribed
+        fn get_transcribed_chunks(&self) -> HashSet<usize> {
+            let mut chunks = HashSet::new();
+
+            for (start, end) in &self.confirmed_ranges {
+                for i in *start..*end {
+                    chunks.insert(i);
+                }
+            }
+
+            if let Some((start, end)) = self.remaining_range {
+                for i in start..end {
+                    chunks.insert(i);
+                }
+            }
+
+            chunks
+        }
+
+        /// Returns chunks that were transcribed more than once (overlap detection)
+        fn get_overlapping_chunks(&self) -> HashSet<usize> {
+            let mut seen = HashSet::new();
+            let mut overlaps = HashSet::new();
+
+            for (start, end) in &self.confirmed_ranges {
+                for i in *start..*end {
+                    if !seen.insert(i) {
+                        overlaps.insert(i);
+                    }
+                }
+            }
+
+            if let Some((start, end)) = self.remaining_range {
+                for i in start..end {
+                    if !seen.insert(i) {
+                        overlaps.insert(i);
+                    }
+                }
+            }
+
+            overlaps
+        }
+    }
+
+    #[test]
+    fn test_all_chunks_transcribed_exact_windows() {
+        // Scenario: Total chunks divide evenly into windows
+        // window=10, lag=2, periodic=5, total=30
+        // Expected: 3 windows of 10 chunks each, no remainder
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        let transcribed = sim.simulate(30);
+
+        // All 30 chunks should be transcribed
+        let expected: HashSet<usize> = (0..30).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        // No overlaps
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(overlaps.is_empty(), "No chunks should be transcribed twice");
+    }
+
+    #[test]
+    fn test_all_chunks_transcribed_with_remainder() {
+        // Scenario: Total chunks don't divide evenly
+        // window=10, lag=2, periodic=5, total=35
+        // Expected: 3 windows + 5 remaining chunks
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        let transcribed = sim.simulate(35);
+
+        let expected: HashSet<usize> = (0..35).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        // Should have remainder
+        assert!(
+            sim.remaining_range.is_some(),
+            "Should have remaining chunks"
+        );
+
+        // No overlaps
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(overlaps.is_empty(), "No chunks should be transcribed twice");
+    }
+
+    #[test]
+    fn test_all_chunks_transcribed_small_total() {
+        // Scenario: Very few chunks, less than one window
+        // window=10, lag=2, periodic=5, total=5
+        // Expected: All transcribed as "remaining" at the end
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        let transcribed = sim.simulate(5);
+
+        let expected: HashSet<usize> = (0..5).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        // Should have no confirmed windows, only remaining
+        assert!(
+            sim.confirmed_ranges.is_empty(),
+            "Should have no confirmed windows"
+        );
+        assert_eq!(
+            sim.remaining_range,
+            Some((0, 5)),
+            "All should be in remaining"
+        );
+    }
+
+    #[test]
+    fn test_all_chunks_transcribed_exactly_one_window() {
+        // Scenario: Exactly one window worth of settled audio
+        // window=10, lag=2, periodic=5, total=12 (10 settled + 2 lag)
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        let transcribed = sim.simulate(12);
+
+        let expected: HashSet<usize> = (0..12).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+    }
+
+    #[test]
+    fn test_no_gaps_large_simulation() {
+        // Simulate a realistic session: ~30 seconds at 16kHz with 1024 chunk size
+        // That's about 469 chunks
+        // window=5s (~78 chunks), lag=1s (~16 chunks), periodic=1s (~16 chunks)
+        let window_chunks = 78;
+        let lag_chunks = 16;
+        let periodic_threshold = 16;
+        let total_chunks = 469;
+
+        let mut sim = TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
+        let transcribed = sim.simulate(total_chunks);
+
+        // Verify all chunks are covered
+        let expected: HashSet<usize> = (0..total_chunks).collect();
+        let missing: HashSet<_> = expected.difference(&transcribed).collect();
+        assert!(
+            missing.is_empty(),
+            "Missing chunks: {:?} (count: {})",
+            missing,
+            missing.len()
+        );
+
+        // Verify no overlaps
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(
+            overlaps.is_empty(),
+            "Overlapping chunks: {:?} (count: {})",
+            overlaps,
+            overlaps.len()
+        );
+    }
+
+    #[test]
+    fn test_no_gaps_various_sizes() {
+        // Test many different total sizes to catch edge cases
+        let window_chunks = 10;
+        let lag_chunks = 3;
+        let periodic_threshold = 4;
+
+        for total in 1..=100 {
+            let mut sim =
+                TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
+            let transcribed = sim.simulate(total);
+
+            let expected: HashSet<usize> = (0..total).collect();
+            assert_eq!(
+                transcribed, expected,
+                "All {} chunks should be transcribed",
+                total
+            );
+
+            let overlaps = sim.get_overlapping_chunks();
+            assert!(
+                overlaps.is_empty(),
+                "No overlaps for {} chunks, got {:?}",
+                total,
+                overlaps
+            );
+        }
+    }
+
+    #[test]
+    fn test_lag_larger_than_window() {
+        // Edge case: lag > window (unusual but should still work)
+        // window=5, lag=10, periodic=3, total=50
+        let mut sim = TranscriptionWindowSimulator::new(5, 10, 3);
+        let transcribed = sim.simulate(50);
+
+        let expected: HashSet<usize> = (0..50).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(overlaps.is_empty(), "No overlaps expected");
+    }
+
+    #[test]
+    fn test_single_chunk() {
+        // Edge case: Only one chunk
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        let transcribed = sim.simulate(1);
+
+        let expected: HashSet<usize> = [0].into_iter().collect();
+        assert_eq!(transcribed, expected, "Single chunk should be transcribed");
+    }
+
+    #[test]
+    fn test_zero_lag() {
+        // Edge case: No lag (immediate confirmation)
+        // window=5, lag=0, periodic=3, total=20
+        let mut sim = TranscriptionWindowSimulator::new(5, 0, 3);
+        let transcribed = sim.simulate(20);
+
+        let expected: HashSet<usize> = (0..20).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(overlaps.is_empty(), "No overlaps expected");
+    }
+
+    #[test]
+    fn test_periodic_threshold_one() {
+        // Edge case: Check every chunk (periodic threshold = 1)
+        // This is aggressive but should still produce correct results
+        let mut sim = TranscriptionWindowSimulator::new(5, 2, 1);
+        let transcribed = sim.simulate(30);
+
+        let expected: HashSet<usize> = (0..30).collect();
+        assert_eq!(transcribed, expected, "All chunks should be transcribed");
+
+        let overlaps = sim.get_overlapping_chunks();
+        assert!(overlaps.is_empty(), "No overlaps expected");
+    }
+
+    #[test]
+    fn test_window_boundaries_are_contiguous() {
+        // Verify that confirmed windows are contiguous (no gaps between windows)
+        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
+        sim.simulate(100);
+
+        // Check that each window starts where the previous one ended
+        for i in 1..sim.confirmed_ranges.len() {
+            let prev_end = sim.confirmed_ranges[i - 1].1;
+            let curr_start = sim.confirmed_ranges[i].0;
+            assert_eq!(
+                prev_end, curr_start,
+                "Window {} should start at {} (where window {} ended), but starts at {}",
+                i, prev_end, i - 1, curr_start
+            );
+        }
+
+        // Check that remaining starts where last confirmed ended
+        if let Some((remaining_start, _)) = sim.remaining_range {
+            if let Some((_, last_confirmed_end)) = sim.confirmed_ranges.last() {
+                assert_eq!(
+                    *last_confirmed_end, remaining_start,
+                    "Remaining should start at {} (where last confirmed ended), but starts at {}",
+                    last_confirmed_end, remaining_start
+                );
+            }
         }
     }
 }
