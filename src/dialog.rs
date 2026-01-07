@@ -120,11 +120,15 @@ impl DestinationSlot {
         }
     }
 
-    pub fn with_label(slot_num: usize, label: String, color_hex: String) -> Self {
+    pub fn with_label<L, C>(slot_num: usize, label: L, color_hex: C) -> Self
+    where
+        L: Into<String>,
+        C: Into<String>,
+    {
         Self {
             slot_num,
-            label,
-            color_hex,
+            label: label.into(),
+            color_hex: color_hex.into(),
         }
     }
 }

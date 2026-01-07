@@ -202,7 +202,11 @@ pub enum RecordingCommand {
 }
 
 impl AudioRecorder {
-    pub fn new(sample_rate: u32, source_name: Option<String>, chunk_size: usize) -> Result<Self> {
+    pub fn new<S>(sample_rate: u32, source_name: Option<S>, chunk_size: usize) -> Result<Self>
+    where
+        S: Into<String>,
+    {
+        let source_name = source_name.map(Into::into);
         // Validate that the source exists if specified
         if let Some(ref name) = source_name {
             tracing::info!("Looking for audio source: {}", name);

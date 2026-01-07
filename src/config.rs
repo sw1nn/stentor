@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use xdg::BaseDirectories;
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -222,7 +222,11 @@ impl Config {
     }
 
     /// Load configuration from a specific file
-    pub fn load_from_file(path: &PathBuf) -> Result<Self> {
+    pub fn load_from_file<P>(path: P) -> Result<Self>
+    where
+        P: AsRef<Path>,
+    {
+        let path = path.as_ref();
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config file: {}", path.display()))?;
 

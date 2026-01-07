@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use whisper_rs::{
     FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
 };
@@ -17,7 +17,13 @@ impl Transcriber {
     ///
     /// Model files should be in GGML format and located at:
     /// ~/.local/share/whisper/ggml-{model_size}.bin
-    pub fn new(model_size: String, language: String) -> Result<Self> {
+    pub fn new<M, L>(model_size: M, language: L) -> Result<Self>
+    where
+        M: Into<String>,
+        L: Into<String>,
+    {
+        let model_size = model_size.into();
+        let language = language.into();
         let model_path = Self::get_model_path(&model_size)?;
 
         tracing::info!("Loading Whisper model from: {}", model_path.display());
@@ -80,7 +86,11 @@ impl Transcriber {
     }
 
     /// Download a Whisper model from HuggingFace
-    fn download_model(model_size: &str, target_path: &PathBuf) -> Result<()> {
+    fn download_model<P>(model_size: &str, target_path: P) -> Result<()>
+    where
+        P: AsRef<Path>,
+    {
+        let target_path = target_path.as_ref();
         // Create directory if it doesn't exist
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent).context("Failed to create model directory")?;
