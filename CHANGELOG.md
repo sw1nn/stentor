@@ -2,6 +2,22 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.25.0 - 2026-01-07
+#### Features
+- (**transcription**) add confirmed/preview text with sliding window - (970093e) - Neale Swinnerton
+- (**transcription**) add real-time periodic transcription with improved defaults - (3233d57) - Neale Swinnerton
+- (**ui**) close dialog immediately on Escape, cleanup in background - (b731262) - Neale Swinnerton
+#### Performance Improvements
+- enable Vulkan and OpenMP for GPU acceleration - (647597e) - Neale Swinnerton
+#### Documentation
+- rewrite README with comprehensive documentation - (9e13522) - Neale Swinnerton
+#### Miscellaneous Chores
+- (**pkg**) update PKGBUILD repo urls - (a6682ec) - Neale Swinnerton
+#### Style
+- apply clippy and fmt fixes - (842b39a) - Neale Swinnerton
+
+- - -
+
 ## v0.24.1 - 2025-11-22
 #### Miscellaneous Chores
 - (**pkg**) Update packaging to sw1nn standard - (d7b9254) - Neale Swinnerton
