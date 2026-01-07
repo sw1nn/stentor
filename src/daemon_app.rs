@@ -2,11 +2,12 @@ use anyhow::Result;
 use async_channel::Sender;
 use gtk4::prelude::*;
 use gtk4::{Application, glib};
+use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
 
@@ -208,7 +209,7 @@ pub async fn run(
                                     }
                                     StoreHandlerWindowIds(window_ids) => {
                                         tracing::info!("Storing {} handler window IDs for cleanup", window_ids.len());
-                                        *kitty_window_ids.lock().expect("Mutex poisoned") = window_ids;
+                                        *kitty_window_ids.lock() = window_ids;
                                     }
                                     CloseImmediately => {
                                         tracing::info!("Hiding dialog immediately (background processing will continue)");
@@ -238,7 +239,7 @@ pub async fn run(
                                         tracing::info!("Hiding dialog and cleaning up state");
 
                                         // Stop recording thread if it's still running
-                                        let stop_tx_lock = stop_tx_for_cleanup.lock().expect("Mutex poisoned");
+                                        let stop_tx_lock = stop_tx_for_cleanup.lock();
                                         if let Some(ref tx) = *stop_tx_lock {
                                             tracing::info!("Sending stop command to recording thread");
                                             let _ = tx.send(RecordingCommand::Stop);
@@ -247,7 +248,7 @@ pub async fn run(
 
                                         // Cleanup handler if present
                                         if let Some(ref h) = handler_for_close {
-                                            let window_ids = kitty_window_ids.lock().expect("Mutex poisoned").clone();
+                                            let window_ids = kitty_window_ids.lock().clone();
                                             if let Err(e) = h.cleanup(window_ids) {
                                                 tracing::error!("Handler cleanup failed: {}", e);
                                             }
@@ -282,7 +283,7 @@ pub async fn run(
                                 let _ = ui_tx_for_manual_stop.send_blocking(UIMessage::CloseImmediately);
 
                                 // Clone window_ids now (at invocation time, not setup time)
-                                let window_ids = kitty_window_ids_for_manual_stop.lock().expect("Mutex poisoned").clone();
+                                let window_ids = kitty_window_ids_for_manual_stop.lock().clone();
 
                                 // Do cleanup in background
                                 let stop_tx = Arc::clone(&stop_tx_clone);
@@ -290,7 +291,7 @@ pub async fn run(
                                 let ui_tx_close = ui_tx_for_manual_stop.clone();
                                 std::thread::spawn(move || {
                                     // Stop recording thread
-                                    let stop_tx_lock = stop_tx.lock().expect("Mutex poisoned");
+                                    let stop_tx_lock = stop_tx.lock();
                                     if let Some(ref tx) = *stop_tx_lock {
                                         let _ = tx.send(RecordingCommand::Stop);
                                     }
@@ -320,7 +321,7 @@ pub async fn run(
                                 let _ = ui_tx_for_close.send_blocking(UIMessage::CloseImmediately);
 
                                 // Clone window_ids now (at invocation time, not setup time)
-                                let window_ids = kitty_window_ids_for_send.lock().expect("Mutex poisoned").clone();
+                                let window_ids = kitty_window_ids_for_send.lock().clone();
 
                                 // Execute output command and cleanup in background
                                 let cmd_str = output_command_for_send.clone();
@@ -355,7 +356,7 @@ pub async fn run(
                                 let _ = ui_tx_for_cancel.send_blocking(UIMessage::CloseImmediately);
 
                                 // Clone window_ids now (at invocation time, not setup time)
-                                let window_ids = kitty_window_ids_for_cancel.lock().expect("Mutex poisoned").clone();
+                                let window_ids = kitty_window_ids_for_cancel.lock().clone();
 
                                 // Do cleanup in background
                                 let handler = handler_for_cancel.clone();
@@ -363,7 +364,7 @@ pub async fn run(
                                 let ui_tx_close = ui_tx_for_cancel.clone();
                                 std::thread::spawn(move || {
                                     // Stop recording thread if running
-                                    let stop_tx_lock = stop_tx.lock().expect("Mutex poisoned");
+                                    let stop_tx_lock = stop_tx.lock();
                                     if let Some(ref tx) = *stop_tx_lock {
                                         let _ = tx.send(RecordingCommand::Stop);
                                     }
@@ -392,10 +393,10 @@ pub async fn run(
                                 let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
                                 // Store the destination slot for auto-send
-                                auto_send_slots_clone2.lock().expect("Mutex poisoned").push(dest_num);
+                                auto_send_slots_clone2.lock().push(dest_num);
 
                                 // Trigger stop to finalize transcription (continues in background)
-                                let stop_tx_lock = stop_tx_clone2.lock().expect("Mutex poisoned");
+                                let stop_tx_lock = stop_tx_clone2.lock();
                                 if let Some(ref tx) = *stop_tx_lock {
                                     let _ = tx.send(RecordingCommand::Stop);
                                 }
@@ -442,8 +443,8 @@ pub async fn run(
                                 }
                             }
                             // Clear stop_tx and auto_send_slots when done
-                            *stop_tx_storage.lock().expect("Mutex poisoned") = None;
-                            auto_send_for_recording.lock().expect("Mutex poisoned").clear();
+                            *stop_tx_storage.lock() = None;
+                            auto_send_for_recording.lock().clear();
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
                             tracing::info!("Recording thread finished, cleared recording_active flag");
@@ -451,10 +452,10 @@ pub async fn run(
                 }
                 Stop { command_slot } => {
                     // Store the command slot for auto-send after transcription
-                    auto_send_slots_clone.lock().expect("Mutex poisoned").push(command_slot);
+                    auto_send_slots_clone.lock().push(command_slot);
 
                     // Trigger manual stop
-                    let stop_tx_lock = current_stop_tx_clone.lock().expect("Mutex poisoned");
+                    let stop_tx_lock = current_stop_tx_clone.lock();
                     if let Some(ref tx) = *stop_tx_lock {
                         let _ = tx.send(RecordingCommand::Stop);
                     }

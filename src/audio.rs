@@ -6,10 +6,11 @@ use libpulse_binding::mainloop::threaded::Mainloop;
 use libpulse_binding::sample::{Format, Spec};
 use libpulse_binding::stream::Direction;
 use libpulse_simple_binding::Simple;
+use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, Mutex};
 
 /// Helper to wait for PulseAudio context to be ready
 pub fn wait_for_context_ready(mainloop: &mut Mainloop, context: &PulseContext) -> Result<()> {
@@ -99,7 +100,7 @@ impl PulseIntrospector {
             if let ListResult::Item(source_info) = list_result
                 && let Some(desc) = source_info.description.as_ref()
             {
-                *desc_result_clone.lock().expect("Mutex poisoned") = Some(desc.to_string());
+                *desc_result_clone.lock() = Some(desc.to_string());
             }
         });
 
@@ -107,7 +108,7 @@ impl PulseIntrospector {
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.mainloop.lock();
 
-        let desc = desc_result.lock().expect("Mutex poisoned").clone();
+        let desc = desc_result.lock().clone();
         desc.ok_or_else(|| {
             anyhow::anyhow!("Could not get description for source '{}'", source_name)
         })
@@ -130,7 +131,7 @@ impl PulseIntrospector {
         let introspector = self.context.introspect();
         introspector.get_server_info(move |server_info| {
             if let Some(default_source) = server_info.default_source_name.as_ref() {
-                *result_clone.lock().expect("Mutex poisoned") = Some(default_source.to_string());
+                *result_clone.lock() = Some(default_source.to_string());
             }
         });
 
@@ -138,7 +139,7 @@ impl PulseIntrospector {
         std::thread::sleep(std::time::Duration::from_millis(100));
         self.mainloop.lock();
 
-        Ok(result.lock().expect("Mutex poisoned").clone())
+        Ok(result.lock().clone())
     }
 
     /// List all available source names.
@@ -287,9 +288,7 @@ impl AudioRecorder {
 
             loop {
                 // Check for stop command
-                if let Ok(rx) = cmd_rx.lock()
-                    && let Ok(RecordingCommand::Stop) = rx.try_recv()
-                {
+                if let Ok(RecordingCommand::Stop) = cmd_rx.lock().try_recv() {
                     tracing::info!("Stop command received in audio thread");
                     break;
                 }

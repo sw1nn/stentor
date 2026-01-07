@@ -1,6 +1,7 @@
 use anyhow::Result;
 use async_channel::Sender;
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 use std::thread;
 
 use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
@@ -71,7 +72,7 @@ pub fn start_recording_session(
     let stop_rx = Arc::new(Mutex::new(stop_rx));
 
     // Store stop_tx BEFORE starting recording so Escape key can use it
-    *stop_tx_storage.lock().expect("Mutex poisoned") = Some(stop_tx);
+    *stop_tx_storage.lock() = Some(stop_tx);
 
     // Start audio stream (runs in background thread)
     recorder.start_recording(chunk_tx, stop_rx)?;
@@ -195,13 +196,12 @@ pub fn start_recording_session(
                         // Periodic transcription while speaking
                         if chunks_since_last_transcription >= periodic_chunks_threshold
                             && !recorded_audio.is_empty()
-                            && let Ok(_guard) = transcription_in_flight.try_lock()
+                            && let Some(_guard) = transcription_in_flight.try_lock()
                         {
                             chunks_since_last_transcription = 0;
 
                             let total_chunks = recorded_audio.len();
-                            let current_confirmed =
-                                *confirmed_chunks.lock().expect("Mutex poisoned");
+                            let current_confirmed = *confirmed_chunks.lock();
 
                             // Calculate settled audio (older than lag)
                             let settled_chunks = total_chunks.saturating_sub(lag_chunks);
@@ -228,12 +228,10 @@ pub fn start_recording_session(
                             let window_size = window_chunks;
 
                             thread::spawn(move || {
-                                let _guard = in_flight_mutex.lock().expect("Mutex poisoned");
+                                let _guard = in_flight_mutex.lock();
 
-                                let mut current_confirmed_text =
-                                    confirmed_text_ref.lock().expect("Mutex poisoned").clone();
-                                let mut current_confirmed_idx =
-                                    *confirmed_chunks_ref.lock().expect("Mutex poisoned");
+                                let mut current_confirmed_text = confirmed_text_ref.lock().clone();
+                                let mut current_confirmed_idx = *confirmed_chunks_ref.lock();
 
                                 // If we can confirm a window, transcribe it
                                 if can_confirm {
@@ -270,10 +268,8 @@ pub fn start_recording_session(
                                     current_confirmed_idx = window_end;
 
                                     // Update shared state
-                                    *confirmed_text_ref.lock().expect("Mutex poisoned") =
-                                        current_confirmed_text.clone();
-                                    *confirmed_chunks_ref.lock().expect("Mutex poisoned") =
-                                        current_confirmed_idx;
+                                    *confirmed_text_ref.lock() = current_confirmed_text.clone();
+                                    *confirmed_chunks_ref.lock() = current_confirmed_idx;
                                 }
 
                                 // Always transcribe remaining (unconfirmed) audio as preview
@@ -326,12 +322,11 @@ pub fn start_recording_session(
                         {
                             // Try to acquire the lock (non-blocking)
                             // If we can't acquire it, transcription is already in flight
-                            if let Ok(_guard) = transcription_in_flight.try_lock() {
+                            if let Some(_guard) = transcription_in_flight.try_lock() {
                                 chunks_since_last_transcription = 0;
 
                                 let total_chunks = recorded_audio.len();
-                                let current_confirmed =
-                                    *confirmed_chunks.lock().expect("Mutex poisoned");
+                                let current_confirmed = *confirmed_chunks.lock();
 
                                 // Calculate settled audio (older than lag)
                                 let settled_chunks = total_chunks.saturating_sub(lag_chunks);
@@ -365,12 +360,11 @@ pub fn start_recording_session(
                                 let window_size = window_chunks;
 
                                 thread::spawn(move || {
-                                    let _guard = in_flight_mutex.lock().expect("Mutex poisoned");
+                                    let _guard = in_flight_mutex.lock();
 
                                     let mut current_confirmed_text =
-                                        confirmed_text_ref.lock().expect("Mutex poisoned").clone();
-                                    let mut current_confirmed_idx =
-                                        *confirmed_chunks_ref.lock().expect("Mutex poisoned");
+                                        confirmed_text_ref.lock().clone();
+                                    let mut current_confirmed_idx = *confirmed_chunks_ref.lock();
 
                                     // If we can confirm a window, transcribe it
                                     if can_confirm {
@@ -407,10 +401,8 @@ pub fn start_recording_session(
                                         current_confirmed_idx = window_end;
 
                                         // Update shared state
-                                        *confirmed_text_ref.lock().expect("Mutex poisoned") =
-                                            current_confirmed_text.clone();
-                                        *confirmed_chunks_ref.lock().expect("Mutex poisoned") =
-                                            current_confirmed_idx;
+                                        *confirmed_text_ref.lock() = current_confirmed_text.clone();
+                                        *confirmed_chunks_ref.lock() = current_confirmed_idx;
                                     }
 
                                     // Always transcribe remaining (unconfirmed) audio as preview
@@ -475,8 +467,8 @@ pub fn start_recording_session(
     // Audio stream cleanup happens automatically in the background thread
 
     // Get confirmed text so far
-    let mut final_text = confirmed_text.lock().expect("Mutex poisoned").clone();
-    let current_confirmed_idx = *confirmed_chunks.lock().expect("Mutex poisoned");
+    let mut final_text = confirmed_text.lock().clone();
+    let current_confirmed_idx = *confirmed_chunks.lock();
 
     tracing::info!(
         confirmed_text = %final_text,
@@ -487,7 +479,7 @@ pub fn start_recording_session(
 
     // Check if we should auto-send to specific slots (atomically retrieve and clear)
     let auto_slots = {
-        let mut slots = auto_send_slots.lock().expect("Mutex poisoned");
+        let mut slots = auto_send_slots.lock();
         let result = slots.clone();
         slots.clear(); // Clear for next session
         result
