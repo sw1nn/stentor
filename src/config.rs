@@ -83,10 +83,7 @@ pub struct Config {
     )]
     pub transcription_window: f32,
 
-    #[serde(
-        default = "default_transcription_lag",
-        alias = "transcription-lag"
-    )]
+    #[serde(default = "default_transcription_lag", alias = "transcription-lag")]
     pub transcription_lag: f32,
 
     #[serde(default, alias = "output-command")]

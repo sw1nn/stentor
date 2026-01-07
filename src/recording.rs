@@ -57,7 +57,9 @@ pub fn start_recording_session(
     let recorder = AudioRecorder::new(16000, source, config.chunk_size)?;
 
     // Log which microphone is being used
-    let device_name = recorder.get_device_name().unwrap_or_else(|_| "Unknown".to_string());
+    let device_name = recorder
+        .get_device_name()
+        .unwrap_or_else(|_| "Unknown".to_string());
     tracing::info!(microphone = %device_name, "Recording with microphone: {device_name}");
 
     // Get the ACTUAL sample rate the device is using (not what we requested)
@@ -173,7 +175,9 @@ pub fn start_recording_session(
                         // Switch to transcription mode once speech starts
                         if !transcription_started {
                             transcription_started = true;
-                            tracing::info!("Speech detected! Transcription will run periodically...");
+                            tracing::info!(
+                                "Speech detected! Transcription will run periodically..."
+                            );
                             let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                                 TranscriptionState::Processing,
                                 "Recording...".to_string(),
@@ -191,115 +195,113 @@ pub fn start_recording_session(
                         // Periodic transcription while speaking
                         if chunks_since_last_transcription >= periodic_chunks_threshold
                             && !recorded_audio.is_empty()
+                            && let Ok(_guard) = transcription_in_flight.try_lock()
                         {
-                            if let Ok(_guard) = transcription_in_flight.try_lock() {
-                                chunks_since_last_transcription = 0;
+                            chunks_since_last_transcription = 0;
 
-                                let total_chunks = recorded_audio.len();
-                                let current_confirmed =
-                                    *confirmed_chunks.lock().expect("Mutex poisoned");
+                            let total_chunks = recorded_audio.len();
+                            let current_confirmed =
+                                *confirmed_chunks.lock().expect("Mutex poisoned");
 
-                                // Calculate settled audio (older than lag)
-                                let settled_chunks = total_chunks.saturating_sub(lag_chunks);
+                            // Calculate settled audio (older than lag)
+                            let settled_chunks = total_chunks.saturating_sub(lag_chunks);
 
-                                // Check if we have a full window of settled audio to confirm
-                                let can_confirm =
-                                    settled_chunks >= current_confirmed + window_chunks;
+                            // Check if we have a full window of settled audio to confirm
+                            let can_confirm = settled_chunks >= current_confirmed + window_chunks;
 
-                                // Clone audio for transcription
-                                let audio_for_transcription: Vec<Vec<f32>> =
-                                    recorded_audio.clone();
+                            // Clone audio for transcription
+                            let audio_for_transcription: Vec<Vec<f32>> = recorded_audio.clone();
 
-                                tracing::info!(
-                                    total_chunks,
-                                    settled_chunks,
-                                    current_confirmed,
-                                    can_confirm,
-                                    "Periodic transcription"
-                                );
+                            tracing::info!(
+                                total_chunks,
+                                settled_chunks,
+                                current_confirmed,
+                                can_confirm,
+                                "Periodic transcription"
+                            );
 
-                                let transcriber_ref = Arc::clone(&transcriber_clone);
-                                let ui_tx_transcribe = ui_tx_for_transcription.clone();
-                                let confirmed_text_ref = Arc::clone(&confirmed_text_clone);
-                                let confirmed_chunks_ref = Arc::clone(&confirmed_chunks_clone);
-                                let in_flight_mutex = Arc::clone(&transcription_in_flight);
-                                let window_size = window_chunks;
+                            let transcriber_ref = Arc::clone(&transcriber_clone);
+                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
+                            let confirmed_text_ref = Arc::clone(&confirmed_text_clone);
+                            let confirmed_chunks_ref = Arc::clone(&confirmed_chunks_clone);
+                            let in_flight_mutex = Arc::clone(&transcription_in_flight);
+                            let window_size = window_chunks;
 
-                                thread::spawn(move || {
-                                    let _guard = in_flight_mutex.lock().expect("Mutex poisoned");
+                            thread::spawn(move || {
+                                let _guard = in_flight_mutex.lock().expect("Mutex poisoned");
 
-                                    let mut current_confirmed_text =
-                                        confirmed_text_ref.lock().expect("Mutex poisoned").clone();
-                                    let mut current_confirmed_idx =
-                                        *confirmed_chunks_ref.lock().expect("Mutex poisoned");
+                                let mut current_confirmed_text =
+                                    confirmed_text_ref.lock().expect("Mutex poisoned").clone();
+                                let mut current_confirmed_idx =
+                                    *confirmed_chunks_ref.lock().expect("Mutex poisoned");
 
-                                    // If we can confirm a window, transcribe it
-                                    if can_confirm {
-                                        let window_end = current_confirmed_idx + window_size;
-                                        let window_audio: Vec<f32> = audio_for_transcription
-                                            [current_confirmed_idx..window_end]
-                                            .iter()
-                                            .flatten()
-                                            .copied()
-                                            .collect();
-
-                                        match transcriber_ref.transcribe(&window_audio) {
-                                            Ok(text) => {
-                                                let cleaned =
-                                                    text.replace("[BLANK_AUDIO]", "").trim().to_string();
-                                                if !cleaned.is_empty() {
-                                                    if !current_confirmed_text.is_empty() {
-                                                        current_confirmed_text.push(' ');
-                                                    }
-                                                    current_confirmed_text.push_str(&cleaned);
-                                                    tracing::debug!(
-                                                        confirmed = %current_confirmed_text,
-                                                        "Window confirmed"
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(error = %e, "Window transcription failed");
-                                            }
-                                        }
-
-                                        current_confirmed_idx = window_end;
-
-                                        // Update shared state
-                                        *confirmed_text_ref.lock().expect("Mutex poisoned") =
-                                            current_confirmed_text.clone();
-                                        *confirmed_chunks_ref.lock().expect("Mutex poisoned") =
-                                            current_confirmed_idx;
-                                    }
-
-                                    // Always transcribe remaining (unconfirmed) audio as preview
-                                    let preview_audio: Vec<f32> = audio_for_transcription
-                                        [current_confirmed_idx..]
+                                // If we can confirm a window, transcribe it
+                                if can_confirm {
+                                    let window_end = current_confirmed_idx + window_size;
+                                    let window_audio: Vec<f32> = audio_for_transcription
+                                        [current_confirmed_idx..window_end]
                                         .iter()
                                         .flatten()
                                         .copied()
                                         .collect();
 
-                                    let preview_text = if !preview_audio.is_empty() {
-                                        match transcriber_ref.transcribe(&preview_audio) {
-                                            Ok(text) => {
-                                                text.replace("[BLANK_AUDIO]", "").trim().to_string()
+                                    match transcriber_ref.transcribe(&window_audio) {
+                                        Ok(text) => {
+                                            let cleaned = text
+                                                .replace("[BLANK_AUDIO]", "")
+                                                .trim()
+                                                .to_string();
+                                            if !cleaned.is_empty() {
+                                                if !current_confirmed_text.is_empty() {
+                                                    current_confirmed_text.push(' ');
+                                                }
+                                                current_confirmed_text.push_str(&cleaned);
+                                                tracing::debug!(
+                                                    confirmed = %current_confirmed_text,
+                                                    "Window confirmed"
+                                                );
                                             }
-                                            Err(_) => String::new(),
                                         }
-                                    } else {
-                                        String::new()
-                                    };
+                                        Err(e) => {
+                                            tracing::warn!(error = %e, "Window transcription failed");
+                                        }
+                                    }
 
-                                    // Send confirmed + preview to UI
-                                    let _ = ui_tx_transcribe.try_send(
-                                        UIMessage::SetConfirmedAndPreview(
-                                            current_confirmed_text,
-                                            preview_text,
-                                        ),
-                                    );
-                                });
-                            }
+                                    current_confirmed_idx = window_end;
+
+                                    // Update shared state
+                                    *confirmed_text_ref.lock().expect("Mutex poisoned") =
+                                        current_confirmed_text.clone();
+                                    *confirmed_chunks_ref.lock().expect("Mutex poisoned") =
+                                        current_confirmed_idx;
+                                }
+
+                                // Always transcribe remaining (unconfirmed) audio as preview
+                                let preview_audio: Vec<f32> = audio_for_transcription
+                                    [current_confirmed_idx..]
+                                    .iter()
+                                    .flatten()
+                                    .copied()
+                                    .collect();
+
+                                let preview_text = if !preview_audio.is_empty() {
+                                    match transcriber_ref.transcribe(&preview_audio) {
+                                        Ok(text) => {
+                                            text.replace("[BLANK_AUDIO]", "").trim().to_string()
+                                        }
+                                        Err(_) => String::new(),
+                                    }
+                                } else {
+                                    String::new()
+                                };
+
+                                // Send confirmed + preview to UI
+                                let _ =
+                                    ui_tx_transcribe.try_send(UIMessage::SetConfirmedAndPreview(
+                                        current_confirmed_text,
+                                        preview_text,
+                                    ));
+                            });
                         }
                     }
                     SilenceAfterSpeech => {
@@ -339,8 +341,7 @@ pub fn start_recording_session(
                                     settled_chunks >= current_confirmed + window_chunks;
 
                                 // Clone audio for transcription
-                                let audio_for_transcription: Vec<Vec<f32>> =
-                                    recorded_audio.clone();
+                                let audio_for_transcription: Vec<Vec<f32>> = recorded_audio.clone();
 
                                 let reason = if transitioned_to_silence {
                                     "pause"
@@ -383,8 +384,10 @@ pub fn start_recording_session(
 
                                         match transcriber_ref.transcribe(&window_audio) {
                                             Ok(text) => {
-                                                let cleaned =
-                                                    text.replace("[BLANK_AUDIO]", "").trim().to_string();
+                                                let cleaned = text
+                                                    .replace("[BLANK_AUDIO]", "")
+                                                    .trim()
+                                                    .to_string();
                                                 if !cleaned.is_empty() {
                                                     if !current_confirmed_text.is_empty() {
                                                         current_confirmed_text.push(' ');
@@ -566,10 +569,7 @@ pub fn start_recording_session(
             );
             let _ = ui_tx.send_blocking(UIMessage::AutoSendText(final_text.clone(), *slot));
         }
-        tracing::info!(
-            slots = auto_slots.len(),
-            "AutoSendText messages sent"
-        );
+        tracing::info!(slots = auto_slots.len(), "AutoSendText messages sent");
         // Send Close message after all AutoSendText messages to cleanup and hide dialog
         let _ = ui_tx.send_blocking(UIMessage::Close);
     } else {

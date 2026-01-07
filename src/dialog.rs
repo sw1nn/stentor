@@ -777,9 +777,7 @@ impl TranscriptionDialog {
         } else if preview.is_empty() {
             confirmed_escaped.to_string()
         } else {
-            format!(
-                "{confirmed_escaped} <span foreground='#888888'>{preview_escaped}</span>"
-            )
+            format!("{confirmed_escaped} <span foreground='#888888'>{preview_escaped}</span>")
         };
 
         self.text_preview.set_markup(&markup);
