@@ -761,7 +761,10 @@ impl TranscriptionDialog {
     }
 
     pub fn set_text_preview(&self, text: &str) {
-        self.text_preview.set_text(text);
+        // Show preview text in gray to indicate it may be corrected
+        let escaped = glib::markup_escape_text(text);
+        self.text_preview
+            .set_markup(&format!("<span foreground='#888888'>{escaped}</span>"));
     }
 
     pub fn set_transcribed_text(&self, text: &str) {

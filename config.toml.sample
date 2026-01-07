@@ -4,24 +4,39 @@
 [daemon]
 # Whisper model size: tiny, base, small, medium, large
 # Larger models are more accurate but slower and require more memory
-# Default: tiny (fastest, good for real-time use)
-model = "tiny"
+# Default: base (good balance of accuracy and speed)
+model = "base"
 
 # Language code for transcription (ISO 639-1)
 # Set to "auto" for automatic language detection (slower)
 language = "en"
 
 # Seconds of silence before stopping recording
-#silence-duration = 1.5
+# Lower = faster feedback, Higher = allows longer natural pauses
+# Default: 2.0
+#silence-duration = 2.0
 
 # RMS threshold below which audio is considered silence
 # Lower values are more sensitive (detect quieter speech)
 # Higher values require louder speech
-#silence-threshold = 0.01
+# Default: 0.002
+#silence-threshold = 0.002
 
 # Minimum duration of speech in seconds before recording starts
 # Helps filter out brief noise
 #min-speech-duration = 0.5
+
+# Audio chunk size in samples
+# Larger chunks = better accuracy but more latency
+# Smaller chunks = more responsive but potentially noisier
+# Default: 1024 (64ms at 16kHz)
+#chunk-size = 1024
+
+# How often to transcribe while speaking (in seconds)
+# Provides real-time preview text during long utterances
+# Set to 0 to disable periodic transcription (only transcribe on pause)
+# Default: 2.0
+#periodic-transcription-interval = 2.0
 
 # Command to execute with transcribed text
 # The transcribed text is available via the $TRANSCRIPTION environment variable

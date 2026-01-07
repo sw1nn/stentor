@@ -185,6 +185,7 @@ impl Drop for PulseIntrospector {
 pub struct AudioRecorder {
     source_name: Option<String>,
     sample_rate: u32,
+    chunk_size: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -198,7 +199,7 @@ pub enum RecordingCommand {
 }
 
 impl AudioRecorder {
-    pub fn new(sample_rate: u32, source_name: Option<String>) -> Result<Self> {
+    pub fn new(sample_rate: u32, source_name: Option<String>, chunk_size: usize) -> Result<Self> {
         // Validate that the source exists if specified
         if let Some(ref name) = source_name {
             tracing::info!("Looking for audio source: {}", name);
@@ -217,6 +218,7 @@ impl AudioRecorder {
         Ok(Self {
             source_name,
             sample_rate,
+            chunk_size,
         })
     }
 
@@ -254,12 +256,13 @@ impl AudioRecorder {
         }
 
         // Set buffer attributes
+        let chunk_size = self.chunk_size;
         let buffer_attr = BufferAttr {
             maxlength: u32::MAX,
             tlength: u32::MAX,
             prebuf: u32::MAX,
             minreq: u32::MAX,
-            fragsize: 1024 * 2, // Request 1024 samples at a time (in bytes, so *2 for s16)
+            fragsize: (chunk_size * 2) as u32, // Request chunk_size samples at a time (in bytes, so *2 for s16)
         };
 
         // Create simple PulseAudio connection
@@ -279,8 +282,8 @@ impl AudioRecorder {
 
         // Spawn a thread to continuously read audio
         std::thread::spawn(move || {
-            // Buffer to read audio into (1024 samples * 2 bytes per sample)
-            let mut buffer = vec![0u8; 1024 * 2];
+            // Buffer to read audio into (chunk_size samples * 2 bytes per sample)
+            let mut buffer = vec![0u8; chunk_size * 2];
 
             loop {
                 // Check for stop command
@@ -363,13 +366,14 @@ impl VoiceActivityDetector {
         min_speech_duration: f32,
         stop_silence_duration: f32,
         sample_rate: u32,
+        samples_per_chunk: usize,
     ) -> Self {
         Self {
             silence_threshold,
             min_speech_duration,
             stop_silence_duration,
             sample_rate,
-            samples_per_chunk: 1024,
+            samples_per_chunk,
         }
     }
 
@@ -432,7 +436,7 @@ mod tests {
 
     #[test]
     fn test_vad_idle_to_speaking() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000, 1024);
         let result = vad.process_chunk(0.05, VadState::Idle, 0, 0);
         assert_eq!(result.state, VadState::Speaking);
         assert!(!result.should_stop);
@@ -440,7 +444,7 @@ mod tests {
 
     #[test]
     fn test_vad_speaking_to_silence() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000, 1024);
         let result = vad.process_chunk(0.005, VadState::Speaking, 0, 10);
         assert_eq!(result.state, VadState::SilenceAfterSpeech);
         assert!(!result.should_stop);
@@ -477,7 +481,7 @@ mod tests {
 
     #[test]
     fn test_vad_state_transitions() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000, 1024);
 
         // Idle + no speech = Idle
         let result = vad.process_chunk(0.005, VadState::Idle, 0, 0);
@@ -497,7 +501,7 @@ mod tests {
 
     #[test]
     fn test_vad_stop_conditions() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000, 1024);
 
         // Calculate required chunks: 1.5 seconds * 16000 Hz / 1024 samples = ~23 chunks
         let stop_chunks = 25; // More than threshold
@@ -531,7 +535,7 @@ mod tests {
 
     #[test]
     fn test_vad_silence_after_speech_continues() {
-        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000);
+        let vad = VoiceActivityDetector::new(0.01, 0.5, 1.5, 16000, 1024);
 
         // SilenceAfterSpeech + silence = SilenceAfterSpeech
         let result = vad.process_chunk(0.005, VadState::SilenceAfterSpeech, 5, 10);

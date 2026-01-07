@@ -117,7 +117,7 @@ pub async fn run(
                         dialog.reset();
 
                         // Get source info and set it while we have mutable borrow
-                        let source_name = match AudioRecorder::new(16000, source.clone()) {
+                        let source_name = match AudioRecorder::new(16000, source.clone(), config_clone.chunk_size) {
                             Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
                             Err(_) => "Default".to_string(),
                         };

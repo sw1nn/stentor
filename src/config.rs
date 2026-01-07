@@ -68,6 +68,15 @@ pub struct Config {
     #[serde(default = "default_min_speech_duration", alias = "min-speech-duration")]
     pub min_speech_duration: f32,
 
+    #[serde(default = "default_chunk_size", alias = "chunk-size")]
+    pub chunk_size: usize,
+
+    #[serde(
+        default = "default_periodic_transcription_interval",
+        alias = "periodic-transcription-interval"
+    )]
+    pub periodic_transcription_interval: f32,
+
     #[serde(default, alias = "output-command")]
     pub output_command: Option<String>,
 
@@ -83,6 +92,8 @@ impl Default for Config {
             silence_duration: default_silence_duration(),
             silence_threshold: default_silence_threshold(),
             min_speech_duration: default_min_speech_duration(),
+            chunk_size: default_chunk_size(),
+            periodic_transcription_interval: default_periodic_transcription_interval(),
             output_command: None,
             socket_name: default_socket_name(),
         }
@@ -90,7 +101,7 @@ impl Default for Config {
 }
 
 fn default_model() -> String {
-    "tiny".to_string()
+    "base".to_string()
 }
 
 fn default_language() -> String {
@@ -98,15 +109,23 @@ fn default_language() -> String {
 }
 
 fn default_silence_duration() -> f32 {
-    1.5
+    2.0
 }
 
 fn default_silence_threshold() -> f32 {
-    0.01
+    0.002
 }
 
 fn default_min_speech_duration() -> f32 {
     0.5
+}
+
+fn default_chunk_size() -> usize {
+    1024
+}
+
+fn default_periodic_transcription_interval() -> f32 {
+    2.0
 }
 
 fn default_socket_name() -> String {
@@ -214,11 +233,13 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.model, "tiny");
+        assert_eq!(config.model, "base");
         assert_eq!(config.language, "en");
-        assert_eq!(config.silence_duration, 1.5);
-        assert_eq!(config.silence_threshold, 0.01);
+        assert_eq!(config.silence_duration, 2.0);
+        assert_eq!(config.silence_threshold, 0.002);
         assert_eq!(config.min_speech_duration, 0.5);
+        assert_eq!(config.chunk_size, 1024);
+        assert_eq!(config.periodic_transcription_interval, 2.0);
         assert!(config.output_command.is_none());
         assert_eq!(config.socket_name, "stentor.sock");
     }
@@ -243,6 +264,9 @@ mod tests {
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.model, "tiny");
         assert_eq!(config.language, "en"); // default
+        assert_eq!(config.silence_duration, 2.0); // default
+        assert_eq!(config.chunk_size, 1024); // default
+        assert_eq!(config.periodic_transcription_interval, 2.0); // default
         assert_eq!(
             config.output_command,
             Some("tmux load-buffer -".to_string())
@@ -268,8 +292,11 @@ mod tests {
     #[test]
     fn test_config_file_default() {
         let config_file = ConfigFile::default();
-        assert_eq!(config_file.daemon.model, "tiny");
+        assert_eq!(config_file.daemon.model, "base");
         assert_eq!(config_file.daemon.language, "en");
+        assert_eq!(config_file.daemon.silence_duration, 2.0);
+        assert_eq!(config_file.daemon.chunk_size, 1024);
+        assert_eq!(config_file.daemon.periodic_transcription_interval, 2.0);
         assert!(config_file.client.source.is_none());
         assert_eq!(config_file.kitty.base_background_color, "#1e1e2e");
     }
