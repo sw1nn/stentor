@@ -709,7 +709,12 @@ pub fn start_recording_session(
     Ok(())
 }
 
-pub fn execute_output_command(command_template: &str, text: &str, slot_num: usize) {
+pub fn execute_output_command(
+    command_template: &str,
+    text: &str,
+    slot_num: usize,
+    extra_env_vars: &[(String, String)],
+) {
     tracing::info!(
         transcription = text,
         slot_num,
@@ -723,6 +728,11 @@ pub fn execute_output_command(command_template: &str, text: &str, slot_num: usiz
         .arg(command_template)
         .env("TRANSCRIPTION", text)
         .env("SLOT", slot_num.to_string());
+
+    // Add handler-specific environment variables
+    for (key, value) in extra_env_vars {
+        cmd.env(key, value);
+    }
 
     match cmd.status() {
         Ok(status) => {

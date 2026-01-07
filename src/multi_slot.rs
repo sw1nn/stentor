@@ -17,4 +17,10 @@ pub trait MultiSlotHandler: Send + Sync {
 
     /// Cleanup the multi-slot handler (called when recording ends)
     fn cleanup(&self, window_ids: Vec<u64>) -> Result<()>;
+
+    /// Return environment variables to pass to output commands.
+    /// Handler-specific variables (e.g., KITTY_SOCKET for kitty handler).
+    fn output_env_vars(&self) -> Vec<(String, String)> {
+        Vec::new()
+    }
 }

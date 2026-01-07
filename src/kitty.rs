@@ -54,6 +54,17 @@ fn get_kitty_socket_name() -> Result<String> {
     Ok("kitty".to_string())
 }
 
+/// Get the Kitty socket path in the format expected by `kitty @` command.
+/// Returns path like `unix:@kitty` for abstract sockets.
+fn get_kitty_listen_on() -> Result<String> {
+    if let Ok(listen_on) = env::var("KITTY_LISTEN_ON") {
+        // Already in correct format
+        return Ok(listen_on);
+    }
+    // Default to abstract socket
+    Ok("unix:@kitty".to_string())
+}
+
 fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
     let json = serde_json::to_string(&cmd)?;
     tracing::debug!("Sending command JSON: {}", json);
@@ -730,6 +741,13 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         }
 
         Ok(())
+    }
+
+    fn output_env_vars(&self) -> Vec<(String, String)> {
+        match get_kitty_listen_on() {
+            Ok(socket_path) => vec![("KITTY_LISTEN_ON".to_string(), socket_path)],
+            Err(_) => Vec::new(),
+        }
     }
 }
 

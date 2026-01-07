@@ -222,12 +222,16 @@ pub async fn run(
 
                                         // Execute output command in background
                                         let cmd_str = output_command_for_auto_send.clone();
+                                        let extra_env_vars = handler_for_close
+                                            .as_ref()
+                                            .map(|h| h.output_env_vars())
+                                            .unwrap_or_default();
                                         tracing::info!("Output command configured: {:?}", cmd_str);
                                         std::thread::spawn(move || {
                                             tracing::info!("Background thread started for slot {}", dest_num);
                                             if let Some(ref cmd) = cmd_str {
                                                 tracing::info!("Executing output command for slot {}: {}", dest_num, cmd);
-                                                execute_output_command(cmd, &text, dest_num);
+                                                execute_output_command(cmd, &text, dest_num, &extra_env_vars);
                                                 tracing::info!("Output command execution complete for slot {}", dest_num);
                                             } else {
                                                 tracing::warn!("No output command configured for sending text");
@@ -326,11 +330,15 @@ pub async fn run(
 
                                 // Execute output command and cleanup in background
                                 let cmd_str = output_command_for_send.clone();
+                                let extra_env_vars = handler_for_send
+                                    .as_ref()
+                                    .map(|h| h.output_env_vars())
+                                    .unwrap_or_default();
                                 let handler = handler_for_send.clone();
                                 let ui_tx_close = ui_tx_for_close.clone();
                                 std::thread::spawn(move || {
                                     if let Some(ref cmd) = cmd_str {
-                                        execute_output_command(cmd, &text, dest_num);
+                                        execute_output_command(cmd, &text, dest_num, &extra_env_vars);
                                     } else {
                                         tracing::warn!("No output command configured for sending text");
                                     }
