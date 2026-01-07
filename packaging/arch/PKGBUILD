@@ -6,8 +6,8 @@ pkgdesc="Real-time voice transcription with Whisper"
 arch=('x86_64')
 url="https://git.sw1nn.net/sw1nn/stentor"
 license=('GPL3')
-depends=('gtk4' 'libadwaita' 'alsa-lib')
-makedepends=('cargo' 'git')
+depends=('gtk4' 'libadwaita' 'alsa-lib' 'libpulse' 'vulkan-icd-loader')
+makedepends=('cargo' 'git' 'clang' 'cmake' 'vulkan-headers' 'shaderc')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription' 'sw1nn-transcription-git')
 source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/stentor.git#tag=v$pkgver")
