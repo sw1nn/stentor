@@ -594,7 +594,11 @@ pub fn start_recording_session(
 
     // Audio stream cleanup happens automatically in the background thread
 
-    // Get confirmed text so far
+    // Wait for any in-flight transcription to complete before reading final values
+    // Hold the lock while reading to ensure consistency
+    let _transcription_guard = transcription_in_flight.lock();
+
+    // Get confirmed text so far (safe - we hold the transcription lock)
     let mut final_text = confirmed_text.lock().clone();
     let current_confirmed_idx = *confirmed_chunks.lock();
 
