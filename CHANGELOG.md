@@ -2,6 +2,13 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.26.0 - 2026-01-07
+#### Miscellaneous Chores
+- (**deps**) update makedepends - (8427229) - Neale Swinnerton
+- (**deps**) change source url https -> ssh - (02c6008) - Neale Swinnerton
+
+- - -
+
 ## v0.25.0 - 2026-01-07
 #### Features
 - (**transcription**) add confirmed/preview text with sliding window - (970093e) - Neale Swinnerton

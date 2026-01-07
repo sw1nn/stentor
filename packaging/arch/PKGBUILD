@@ -1,6 +1,6 @@
 # Maintainer: Neale Swinnerton <neale@sw1nn.com>
 pkgname=stentor
-pkgver=0.25.0
+pkgver=0.26.0
 pkgrel=1
 pkgdesc="Real-time voice transcription with Whisper"
 arch=('x86_64')
