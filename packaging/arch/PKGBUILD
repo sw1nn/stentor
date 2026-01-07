@@ -10,7 +10,7 @@ depends=('gtk4' 'libadwaita' 'alsa-lib')
 makedepends=('cargo' 'git')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription' 'sw1nn-transcription-git')
-source=("$pkgname::git+https://git.sw1nn.net/sw1nn/stentor.git#tag=v$pkgver")
+source=("$pkgname::git+ssh://git.sw1nn.net/sw1nn/stentor.git#tag=v$pkgver")
 sha256sums=('SKIP')
 
 prepare() {
