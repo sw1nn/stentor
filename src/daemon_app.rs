@@ -100,9 +100,13 @@ pub async fn run(
             use DaemonCommand::*;
             match command {
                 Start { unmute_source, source, multi_slot_handler } => {
-                    // Check if recording is already active (don't set flag yet - do that before thread spawn)
-                    // This prevents accepting new Start commands while recording is in progress
-                    if recording_active_clone.load(Ordering::Acquire) {
+                    // Atomically check-and-set recording_active to prevent race conditions.
+                    // If another Start command comes in while we're setting up, it will fail
+                    // the compare_exchange and be rejected.
+                    if recording_active_clone
+                        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                        .is_err()
+                    {
                         tracing::warn!("Recording already in progress, ignoring Start command");
                         // Bring existing dialog to front if it exists
                         let dialog_ref = current_dialog_clone.borrow();
@@ -111,6 +115,7 @@ pub async fn run(
                         }
                         continue;
                     }
+                    // recording_active is now true - we own the recording session
 
                     // Reset dialog state and set source info before cloning
                     {
@@ -432,10 +437,7 @@ pub async fn run(
                         let auto_send_for_recording = Arc::clone(&auto_send_slots_clone);
                         let recording_active_for_thread = Arc::clone(&recording_active_clone);
 
-                        // Set recording_active flag now, right before spawning thread
-                        // This ensures the flag is only set when we're certain the thread will start,
-                        // avoiding a stuck state if setup fails before this point
-                        recording_active_clone.store(true, Ordering::Release);
+                        // recording_active was set atomically at the start via compare_exchange
 
                         thread::spawn(move || {
                             match start_recording_session(
