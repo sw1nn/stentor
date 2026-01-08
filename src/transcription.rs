@@ -28,8 +28,8 @@ impl Transcriber {
 
         tracing::info!("Loading Whisper model from: {}", model_path.display());
 
-        // Suppress verbose whisper.cpp output by installing logging hooks
-        // Without a logging backend feature enabled, this effectively disables whisper logging
+        // Route whisper.cpp logs through tracing if `whisper-tracing-backend` feature is enabled,
+        // otherwise this suppresses all whisper.cpp output
         whisper_rs::install_logging_hooks();
 
         let ctx_params = WhisperContextParameters::default();

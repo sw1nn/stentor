@@ -47,7 +47,19 @@ Requirements:
 cargo build --release
 ```
 
-Note: The `--release` flag is required for acceptable transcription performance. Debug builds are significantly slower.
+Note: Release builds are recommended for best performance, though GPU acceleration reduces the difference.
+
+#### Build Features
+
+| Feature | Description |
+|---------|-------------|
+| `whisper-tracing-backend` | Route whisper.cpp logs through tracing for debugging GPU initialization |
+
+Example:
+
+```bash
+cargo build --release --features whisper-tracing-backend
+```
 
 ## Configuration
 
@@ -279,14 +291,18 @@ With GPU acceleration, the CPU spends most of its time waiting for the GPU rathe
 
 #### Verifying GPU Acceleration
 
-Check that Vulkan is being used:
+Check that Vulkan is linked:
 
 ```bash
 # Should show libvulkan linked
 ldd $(which stentord) | grep vulkan
 ```
 
-In the logs, you should see Vulkan initialization messages when the daemon starts.
+To see detailed whisper.cpp initialization logs (including GPU backend info), build with the `whisper-tracing-backend` feature:
+
+```bash
+cargo build --release --features whisper-tracing-backend
+```
 
 ## Troubleshooting
 
