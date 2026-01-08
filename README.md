@@ -218,6 +218,11 @@ output-command = "tmux send-keys -t mysession -l \"$TRANSCRIPTION\""
 
 # Send to tmux and press Enter
 output-command = "tmux send-keys -t claude -l \"$TRANSCRIPTION\" && tmux send-keys -t claude Enter"
+
+[kitty]
+# Send text directly to kitty windows matching the slot
+# KITTY_LISTEN_ON is automatically set by the kitty multi-slot handler
+output-command = "kitty @ send-text --match=env:STENTOR_SLOT=$SLOT \"$TRANSCRIPTION\""
 ```
 
 ## Daemon Options
