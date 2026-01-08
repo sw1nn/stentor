@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.28.0 - 2026-01-08
+#### Features
+- (**whisper**) add optional tracing backend for whisper.cpp logs - (d5079f5) - Neale Swinnerton
+#### Documentation
+- (**readme**) add kitty output command example - (c8a2524) - Neale Swinnerton
+
+- - -
+
 ## v0.27.0 - 2026-01-08
 #### Features
 - (**dialog**) add readline-style keybindings to text editor - (510d2e8) - Neale Swinnerton
