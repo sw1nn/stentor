@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box, Button, Label, LevelBar, Orientation, ScrolledWindow,
-    Spinner, TextView, gdk, glib,
+    Application, ApplicationWindow, Box, Button, DeleteType, Label, LevelBar, MovementStep,
+    Orientation, ScrolledWindow, Spinner, TextView, gdk, glib,
 };
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -676,6 +676,63 @@ impl TranscriptionDialog {
                         );
                         return glib::Propagation::Stop;
                     }
+                }
+
+                // Readline-style word navigation (Alt+B, Alt+F)
+                match keyval {
+                    gdk::Key::b | gdk::Key::B => {
+                        // Alt+B: backward word
+                        text_view_clone.emit_move_cursor(MovementStep::Words, -1, false);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::f | gdk::Key::F => {
+                        // Alt+F: forward word
+                        text_view_clone.emit_move_cursor(MovementStep::Words, 1, false);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::d | gdk::Key::D => {
+                        // Alt+D: delete word forward
+                        text_view_clone.emit_delete_from_cursor(DeleteType::WordEnds, 1);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::BackSpace => {
+                        // Alt+Backspace: delete word backward
+                        text_view_clone.emit_delete_from_cursor(DeleteType::WordEnds, -1);
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
+                }
+            }
+
+            // Readline-style Ctrl bindings
+            if modifiers.contains(gdk::ModifierType::CONTROL_MASK) {
+                match keyval {
+                    gdk::Key::a | gdk::Key::A => {
+                        // Ctrl+A: beginning of line
+                        text_view_clone.emit_move_cursor(MovementStep::DisplayLineEnds, -1, false);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::e | gdk::Key::E => {
+                        // Ctrl+E: end of line
+                        text_view_clone.emit_move_cursor(MovementStep::DisplayLineEnds, 1, false);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::k | gdk::Key::K => {
+                        // Ctrl+K: kill to end of line
+                        text_view_clone.emit_delete_from_cursor(DeleteType::DisplayLineEnds, 1);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::u | gdk::Key::U => {
+                        // Ctrl+U: kill to beginning of line
+                        text_view_clone.emit_delete_from_cursor(DeleteType::DisplayLineEnds, -1);
+                        return glib::Propagation::Stop;
+                    }
+                    gdk::Key::w | gdk::Key::W => {
+                        // Ctrl+W: delete word backward
+                        text_view_clone.emit_delete_from_cursor(DeleteType::WordEnds, -1);
+                        return glib::Propagation::Stop;
+                    }
+                    _ => {}
                 }
             }
 
