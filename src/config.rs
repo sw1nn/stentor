@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use xdg::BaseDirectories;
 
+use crate::defaults;
+
 /// Represents a pattern for matching windows to slots.
 /// Parsed from config strings with prefix notation.
 #[derive(Debug, Clone)]
@@ -127,11 +129,11 @@ impl Default for KittyConfig {
 }
 
 fn default_kitty_base_background() -> String {
-    "#1e1e2e".to_string()
+    defaults::KITTY_BASE_BACKGROUND.to_string()
 }
 
 fn default_slot_id_font() -> String {
-    "monospace:bold".to_string()
+    defaults::SLOT_ID_FONT.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -204,43 +206,43 @@ impl Default for Config {
 }
 
 fn default_model() -> String {
-    "base".to_string()
+    defaults::MODEL.to_string()
 }
 
 fn default_language() -> String {
-    "en".to_string()
+    defaults::LANGUAGE.to_string()
 }
 
 fn default_silence_duration() -> f32 {
-    2.0
+    defaults::SILENCE_DURATION
 }
 
 fn default_silence_threshold() -> f32 {
-    0.002
+    defaults::SILENCE_THRESHOLD
 }
 
 fn default_min_speech_duration() -> f32 {
-    0.5
+    defaults::MIN_SPEECH_DURATION
 }
 
 fn default_chunk_size() -> usize {
-    1024
+    defaults::CHUNK_SIZE
 }
 
 fn default_periodic_transcription_interval() -> f32 {
-    1.0
+    defaults::PERIODIC_TRANSCRIPTION_INTERVAL
 }
 
 fn default_transcription_window() -> f32 {
-    5.0
+    defaults::TRANSCRIPTION_WINDOW
 }
 
 fn default_transcription_lag() -> f32 {
-    1.0
+    defaults::TRANSCRIPTION_LAG
 }
 
 fn default_socket_name() -> String {
-    "stentor.sock".to_string()
+    defaults::SOCKET_NAME.to_string()
 }
 
 impl ConfigFile {

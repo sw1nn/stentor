@@ -133,7 +133,7 @@ use std::thread;
 
 use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use crate::config::Config;
-use crate::constants::{CHUNK_RECV_TIMEOUT, ERROR_DISPLAY_DURATION};
+use crate::defaults;
 use crate::dialog::TranscriptionState;
 use crate::source_mute::SourceMuteManager;
 use crate::transcription::Transcriber;
@@ -272,7 +272,7 @@ pub fn start_recording_session(
     tracing::info!("Waiting for speech to begin...");
 
     loop {
-        match chunk_rx.recv_timeout(CHUNK_RECV_TIMEOUT) {
+        match chunk_rx.recv_timeout(defaults::CHUNK_RECV_TIMEOUT) {
             Ok(chunk) => {
                 let rms = chunk.rms;
                 tracing::trace!("Received audio chunk: RMS = {}", rms);
@@ -677,7 +677,7 @@ pub fn start_recording_session(
             "No speech detected".to_string(),
             0.0,
         ));
-        thread::sleep(ERROR_DISPLAY_DURATION);
+        thread::sleep(defaults::ERROR_DISPLAY_DURATION);
         let _ = ui_tx.send_blocking(UIMessage::Close);
         return Ok(());
     }

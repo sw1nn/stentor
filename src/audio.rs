@@ -12,13 +12,11 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
 
-use crate::constants::{
-    PULSE_INTROSPECT_POLL_INTERVAL, PULSE_POLL_INTERVAL, PULSE_READY_MAX_ITERATIONS,
-};
+use crate::defaults;
 
 /// Helper to wait for PulseAudio context to be ready
 pub fn wait_for_context_ready(mainloop: &mut Mainloop, context: &PulseContext) -> Result<()> {
-    for _iteration in 0..PULSE_READY_MAX_ITERATIONS {
+    for _iteration in 0..defaults::PULSE_READY_MAX_ITERATIONS {
         match context.get_state() {
             libpulse_binding::context::State::Ready => {
                 return Ok(());
@@ -31,7 +29,7 @@ pub fn wait_for_context_ready(mainloop: &mut Mainloop, context: &PulseContext) -
             }
             _ => {
                 mainloop.unlock();
-                std::thread::sleep(PULSE_POLL_INTERVAL);
+                std::thread::sleep(defaults::PULSE_POLL_INTERVAL);
                 mainloop.lock();
             }
         }
@@ -86,7 +84,7 @@ impl PulseIntrospector {
         });
 
         self.mainloop.unlock();
-        std::thread::sleep(PULSE_INTROSPECT_POLL_INTERVAL);
+        std::thread::sleep(defaults::PULSE_INTROSPECT_POLL_INTERVAL);
         self.mainloop.lock();
 
         Ok(*found.borrow())
@@ -107,7 +105,7 @@ impl PulseIntrospector {
         });
 
         self.mainloop.unlock();
-        std::thread::sleep(PULSE_INTROSPECT_POLL_INTERVAL);
+        std::thread::sleep(defaults::PULSE_INTROSPECT_POLL_INTERVAL);
         self.mainloop.lock();
 
         let desc = desc_result.lock().clone();
@@ -138,7 +136,7 @@ impl PulseIntrospector {
         });
 
         self.mainloop.unlock();
-        std::thread::sleep(PULSE_INTROSPECT_POLL_INTERVAL);
+        std::thread::sleep(defaults::PULSE_INTROSPECT_POLL_INTERVAL);
         self.mainloop.lock();
 
         Ok(result.lock().clone())
@@ -164,7 +162,7 @@ impl PulseIntrospector {
         });
 
         self.mainloop.unlock();
-        std::thread::sleep(PULSE_INTROSPECT_POLL_INTERVAL);
+        std::thread::sleep(defaults::PULSE_INTROSPECT_POLL_INTERVAL);
         self.mainloop.lock();
 
         Ok(sources.borrow().clone())

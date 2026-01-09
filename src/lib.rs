@@ -1,6 +1,6 @@
 pub mod audio;
 pub mod config;
-pub mod constants;
+pub mod defaults;
 pub mod daemon;
 pub mod daemon_app;
 pub mod dialog;

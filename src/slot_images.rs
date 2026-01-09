@@ -10,12 +10,7 @@ use image::{ImageBuffer, Rgba, RgbaImage};
 use std::path::{Path, PathBuf};
 use xdg::BaseDirectories;
 
-/// Image dimensions for slot number overlays (wide aspect ratio to match terminal windows)
-const IMAGE_WIDTH: u32 = 1920;
-const IMAGE_HEIGHT: u32 = 1080;
-
-/// Font scale for the slot number
-const FONT_SCALE: f32 = 400.0;
+use crate::defaults;
 
 /// Parse a hex color string to RGB components.
 fn hex_to_rgb(hex: &str) -> Option<(u8, u8, u8)> {
@@ -101,8 +96,6 @@ fn generate_empty_image(output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Padding from edge for the slot number (in pixels)
-const CORNER_PADDING: f32 = 20.0;
 
 /// Generate a slot image with the background color baked in.
 /// The image will have the specified background color and a contrasting number in the top-right corner.
@@ -138,12 +131,15 @@ pub fn generate_colored_slot_image(
     let font_data = load_font_data(font_pattern)?;
     let font = FontRef::try_from_slice(&font_data).context("Failed to parse font data")?;
 
-    let scale = PxScale::from(FONT_SCALE);
+    let scale = PxScale::from(defaults::SLOT_IMAGE_FONT_SCALE);
     let digit = slot_num.to_string();
 
     // Create image with background color
-    let mut image: RgbaImage =
-        ImageBuffer::from_pixel(IMAGE_WIDTH, IMAGE_HEIGHT, Rgba([bg_r, bg_g, bg_b, 255]));
+    let mut image: RgbaImage = ImageBuffer::from_pixel(
+        defaults::SLOT_IMAGE_WIDTH,
+        defaults::SLOT_IMAGE_HEIGHT,
+        Rgba([bg_r, bg_g, bg_b, 255]),
+    );
 
     // Get contrasting text color
     let (text_r, text_g, text_b) = get_contrast_color(bg_r, bg_g, bg_b);
@@ -158,15 +154,15 @@ pub fn generate_colored_slot_image(
         let glyph_width = bounds.width();
 
         // Position in top-right corner with padding
-        let x_offset = (IMAGE_WIDTH as f32 - glyph_width - CORNER_PADDING) as i32;
-        let y_offset = CORNER_PADDING as i32;
+        let x_offset = (defaults::SLOT_IMAGE_WIDTH as f32 - glyph_width - defaults::SLOT_IMAGE_CORNER_PADDING) as i32;
+        let y_offset = defaults::SLOT_IMAGE_CORNER_PADDING as i32;
 
         // Draw the glyph with contrasting color, semi-transparent
         outlined.draw(|x, y, coverage| {
             let px = (x as i32 + x_offset) as u32;
             let py = (y as i32 + y_offset) as u32;
 
-            if px < IMAGE_WIDTH && py < IMAGE_HEIGHT {
+            if px < defaults::SLOT_IMAGE_WIDTH && py < defaults::SLOT_IMAGE_HEIGHT {
                 // Blend text color with background based on coverage
                 let alpha = coverage * 0.7; // 70% max opacity for the number
                 let inv_alpha = 1.0 - alpha;
