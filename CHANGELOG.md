@@ -2,6 +2,23 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.29.0 - 2026-01-09
+#### Features
+- (**kitty**) add background images with slot numbers - (6b51309) - Neale Swinnerton
+- (**kitty**) add slot-matches with prefix notation for window matching - (ac4725d) - Neale Swinnerton
+#### Bug Fixes
+- (**kitty**) bake background color into slot images - (6dc1747) - Neale Swinnerton
+- (**kitty**) add missing serde rename for match field in SetColorsPayload - (467685e) - Neale Swinnerton
+#### Performance Improvements
+- (**kitty**) optimize socket batching for window appearance updates - (ee9dc24) - Neale Swinnerton
+- (**kitty**) batch window color reset on cleanup - (13a2802) - Neale Swinnerton
+#### Documentation
+- remove old docs - (a700595) - Neale Swinnerton
+#### Style
+- apply cargo fmt - (1da3852) - Neale Swinnerton
+
+- - -
+
 ## v0.28.0 - 2026-01-08
 #### Features
 - (**whisper**) add optional tracing backend for whisper.cpp logs - (d5079f5) - Neale Swinnerton
