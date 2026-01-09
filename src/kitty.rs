@@ -47,6 +47,7 @@ struct SetBackgroundImagePayload {
     stream_id: Option<String>,
 }
 
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClaudeWindow {
     pub id: u64,
@@ -545,8 +546,10 @@ fn send_set_colors_cmd(
     };
 
     let color_json = serde_json::to_string(&color_cmd)?;
+    tracing::debug!(window_id, json = %color_json, "Sending set-colors command");
     let color_encoded = format!("\x1bP@kitty-cmd{color_json}\x1b\\");
     stream.write_all(color_encoded.as_bytes())?;
+    stream.flush()?;
 
     Ok(())
 }
@@ -630,40 +633,16 @@ where
     Ok(())
 }
 
-/// Send a command to clear the background image.
-fn send_clear_background_image_cmd(
-    stream: &mut UnixStream,
-    window_id: u64,
-) -> Result<()> {
-    let payload = SetBackgroundImagePayload {
-        data: "-".to_string(),
-        match_window: Some(format!("id:{window_id}")),
-        layout: None,
-        stream_id: None,
-    };
-
-    let cmd = KittyCommand {
-        cmd: "set-background-image".to_string(),
-        version: Some(vec![0, 26, 0]),
-        payload: Some(payload),
-    };
-
-    let json = serde_json::to_string(&cmd)?;
-    let encoded_cmd = format!("\x1bP@kitty-cmd{json}\x1b\\");
-    stream.write_all(encoded_cmd.as_bytes())?;
-
-    Ok(())
-}
-
 /// Window appearance configuration for batched setup.
+/// The image_path should point to a pre-generated image with the background color baked in.
 pub struct WindowAppearance<'a> {
     pub window_id: u64,
-    pub color: &'a str,
-    pub image_path: Option<&'a Path>,
+    pub image_path: &'a Path,
 }
 
-/// Set background colors and images for multiple windows in a single socket connection.
+/// Set background images for multiple windows in a single socket connection.
 /// Fire-and-forget style for best performance.
+/// Images should have the background color baked in (generated via slot_images::generate_colored_slot_image).
 pub fn set_window_appearances(windows: &[WindowAppearance<'_>]) -> Result<()> {
     if windows.is_empty() {
         return Ok(());
@@ -677,19 +656,11 @@ pub fn set_window_appearances(windows: &[WindowAppearance<'_>]) -> Result<()> {
 
     tracing::debug!(
         window_count = windows.len(),
-        "Setting window appearances (batched)"
+        "Setting window background images (batched)"
     );
 
-    // First pass: send all color commands (fast, no chunking)
     for w in windows {
-        send_set_colors_cmd(&mut stream, w.color, w.window_id)?;
-    }
-
-    // Second pass: stream all images sequentially
-    for w in windows {
-        if let Some(path) = w.image_path {
-            send_set_background_image_cmd(&mut stream, path, w.window_id)?;
-        }
+        send_set_background_image_cmd(&mut stream, w.image_path, w.window_id)?;
     }
 
     stream.flush()?;
@@ -700,7 +671,11 @@ pub fn set_window_appearances(windows: &[WindowAppearance<'_>]) -> Result<()> {
 
 /// Reset window appearances: clear background images and reset colors.
 /// Single socket connection for best performance.
-pub fn reset_window_appearances(color: &str, window_ids: &[u64]) -> Result<()> {
+/// The `empty_image_path` should point to a transparent PNG used to clear backgrounds.
+pub fn reset_window_appearances<P>(color: &str, window_ids: &[u64], empty_image_path: P) -> Result<()>
+where
+    P: AsRef<Path>,
+{
     if window_ids.is_empty() {
         return Ok(());
     }
@@ -717,38 +692,19 @@ pub fn reset_window_appearances(color: &str, window_ids: &[u64]) -> Result<()> {
         "Resetting window appearances (batched)"
     );
 
-    // First: clear all background images
+    // For each window: set empty image first, then color
+    // (setting background image resets the background color)
     for &window_id in window_ids {
-        if let Err(e) = send_clear_background_image_cmd(&mut stream, window_id) {
+        if let Err(e) = send_set_background_image_cmd(&mut stream, &empty_image_path, window_id) {
             tracing::warn!(window_id, error = %e, "Failed to clear background image");
+        }
+        if let Err(e) = send_set_colors_cmd(&mut stream, color, window_id) {
+            tracing::warn!(window_id, error = %e, "Failed to reset colors");
         }
     }
 
-    // Second: reset all colors
-    let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
-    let (fg_r, fg_g, fg_b) = get_contrast_color(color);
-
-    for &window_id in window_ids {
-        let mut colors = HashMap::new();
-        colors.insert("background".to_string(), rgb_to_int(bg_r, bg_g, bg_b));
-        colors.insert("foreground".to_string(), rgb_to_int(fg_r, fg_g, fg_b));
-
-        let cmd = KittyCommand {
-            cmd: "set-colors".to_string(),
-            version: Some(vec![0, 26, 0]),
-            payload: Some(SetColorsPayload {
-                colors: Some(colors),
-                match_window: Some(format!("id:{window_id}")),
-                reset: None,
-            }),
-        };
-
-        let json = serde_json::to_string(&cmd)?;
-        let encoded = format!("\x1bP@kitty-cmd{json}\x1b\\");
-        stream.write_all(encoded.as_bytes())?;
-    }
-
     stream.flush()?;
+
     tracing::debug!(window_count = window_ids.len(), "Window appearances reset");
     Ok(())
 }
@@ -882,15 +838,6 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         thread::spawn(move || {
             tracing::info!("Background: Starting Kitty window discovery");
 
-            // Ensure slot images are generated
-            let slot_image_dir = match slot_images::ensure_slot_images(&slot_id_font) {
-                Ok(dir) => Some(dir),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to generate slot images, continuing without background images");
-                    None
-                }
-            };
-
             match list_kitty_windows() {
                 Ok(data) => {
                     let stentor_windows = find_stentor_windows(&data, &slot_matchers);
@@ -906,7 +853,7 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         window_id: u64,
                         slot_num: usize,
                         color: String,
-                        image_path: Option<std::path::PathBuf>,
+                        image_path: std::path::PathBuf,
                         label: String,
                     }
 
@@ -914,9 +861,19 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                     for window in stentor_windows.iter().take(8) {
                         let slot_num = window.slot_num;
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                            let image_path = slot_image_dir
-                                .as_ref()
-                                .map(|dir| dir.join(format!("slot_{slot_num}.png")));
+                            // Generate colored slot image (with background color baked in)
+                            let image_path = match slot_images::generate_colored_slot_image(
+                                slot_num,
+                                color_hex,
+                                &slot_id_font,
+                            ) {
+                                Ok(path) => path,
+                                Err(e) => {
+                                    tracing::warn!(slot_num, error = %e, "Failed to generate colored slot image");
+                                    continue;
+                                }
+                            };
+
                             let label = parse_worktree_label(&window.cwd);
 
                             setups.push(WindowSetup {
@@ -934,8 +891,7 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         .iter()
                         .map(|s| WindowAppearance {
                             window_id: s.window_id,
-                            color: &s.color,
-                            image_path: s.image_path.as_deref(),
+                            image_path: &s.image_path,
                         })
                         .collect();
 
@@ -1008,8 +964,17 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
             "Resetting window appearances"
         );
 
+        // Get empty image path for clearing backgrounds
+        let empty_image_path = match slot_images::get_empty_image_path(&self.config.slot_id_font) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to get empty image path");
+                return Ok(());
+            }
+        };
+
         // Clear images and reset colors in a single batched socket call
-        if let Err(e) = reset_window_appearances(&background_color, &window_ids) {
+        if let Err(e) = reset_window_appearances(&background_color, &window_ids, &empty_image_path) {
             tracing::warn!(error = %e, "Failed to reset window appearances");
         }
 
