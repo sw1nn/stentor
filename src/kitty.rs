@@ -654,64 +654,52 @@ fn send_clear_background_image_cmd(
     Ok(())
 }
 
-/// Set background color and optionally background image via socket protocol.
-pub fn set_window_color_and_image<P>(
-    color: &str,
-    window_id: u64,
-    image_path: Option<P>,
-) -> Result<()>
-where
-    P: AsRef<Path>,
-{
+/// Window appearance configuration for batched setup.
+pub struct WindowAppearance<'a> {
+    pub window_id: u64,
+    pub color: &'a str,
+    pub image_path: Option<&'a Path>,
+}
+
+/// Set background colors and images for multiple windows in a single socket connection.
+/// Fire-and-forget style for best performance.
+pub fn set_window_appearances(windows: &[WindowAppearance<'_>]) -> Result<()> {
+    if windows.is_empty() {
+        return Ok(());
+    }
+
     let socket_name = get_kitty_socket_name()?;
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
         .context("Failed to create abstract socket address")?;
     let mut stream =
         UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
 
-    // Set a read timeout for responses
-    stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
-
     tracing::debug!(
-        window_id,
-        has_image = image_path.is_some(),
-        "Setting window color and image"
+        window_count = windows.len(),
+        "Setting window appearances (batched)"
     );
 
-    // Set color (fire-and-forget is fine for colors)
-    send_set_colors_cmd(&mut stream, color, window_id)?;
-    stream.flush()?;
+    // First pass: send all color commands (fast, no chunking)
+    for w in windows {
+        send_set_colors_cmd(&mut stream, w.color, w.window_id)?;
+    }
 
-    // Set background image if provided - need to wait for completion
-    if let Some(path) = image_path {
-        send_set_background_image_cmd(&mut stream, path, window_id)?;
-
-        // Read and discard any response to ensure the transfer completes
-        let mut response_buf = vec![0u8; 4096];
-        loop {
-            match stream.read(&mut response_buf) {
-                Ok(0) => break, // EOF
-                Ok(_n) => {
-                    // Got response, check if it looks like completion
-                    // Continue reading until timeout or EOF
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
-                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
-                Err(e) => {
-                    tracing::trace!(window_id, error = %e, "Error reading response");
-                    break;
-                }
-            }
+    // Second pass: stream all images sequentially
+    for w in windows {
+        if let Some(path) = w.image_path {
+            send_set_background_image_cmd(&mut stream, path, w.window_id)?;
         }
     }
 
-    tracing::debug!(window_id, "Window appearance updated");
+    stream.flush()?;
+
+    tracing::debug!(window_count = windows.len(), "Window appearances updated");
     Ok(())
 }
 
-/// Reset background colors for multiple windows in a single socket connection.
-/// Fire-and-forget style: sends all commands without waiting for responses.
-pub fn reset_window_colors(color: &str, window_ids: &[u64]) -> Result<()> {
+/// Reset window appearances: clear background images and reset colors.
+/// Single socket connection for best performance.
+pub fn reset_window_appearances(color: &str, window_ids: &[u64]) -> Result<()> {
     if window_ids.is_empty() {
         return Ok(());
     }
@@ -722,14 +710,22 @@ pub fn reset_window_colors(color: &str, window_ids: &[u64]) -> Result<()> {
     let mut stream =
         UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
 
-    let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
-    let (fg_r, fg_g, fg_b) = get_contrast_color(color);
-
     tracing::debug!(
         color,
         window_count = window_ids.len(),
-        "Resetting window colors (fire-and-forget)"
+        "Resetting window appearances (batched)"
     );
+
+    // First: clear all background images
+    for &window_id in window_ids {
+        if let Err(e) = send_clear_background_image_cmd(&mut stream, window_id) {
+            tracing::warn!(window_id, error = %e, "Failed to clear background image");
+        }
+    }
+
+    // Second: reset all colors
+    let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
+    let (fg_r, fg_g, fg_b) = get_contrast_color(color);
 
     for &window_id in window_ids {
         let mut colors = HashMap::new();
@@ -741,47 +737,18 @@ pub fn reset_window_colors(color: &str, window_ids: &[u64]) -> Result<()> {
             version: Some(vec![0, 26, 0]),
             payload: Some(SetColorsPayload {
                 colors: Some(colors),
-                match_window: Some(format!("id:{}", window_id)),
+                match_window: Some(format!("id:{window_id}")),
                 reset: None,
             }),
         };
 
         let json = serde_json::to_string(&cmd)?;
-        let encoded = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+        let encoded = format!("\x1bP@kitty-cmd{json}\x1b\\");
         stream.write_all(encoded.as_bytes())?;
     }
 
     stream.flush()?;
-    tracing::debug!(window_count = window_ids.len(), "Window color reset commands sent");
-    Ok(())
-}
-
-/// Clear background images for multiple windows via socket protocol.
-/// Fire-and-forget style: sends all commands without waiting for responses.
-pub fn clear_window_background_images(window_ids: &[u64]) -> Result<()> {
-    if window_ids.is_empty() {
-        return Ok(());
-    }
-
-    let socket_name = get_kitty_socket_name()?;
-    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
-        .context("Failed to create abstract socket address")?;
-    let mut stream =
-        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
-
-    tracing::debug!(
-        window_count = window_ids.len(),
-        "Clearing window background images"
-    );
-
-    for &window_id in window_ids {
-        if let Err(e) = send_clear_background_image_cmd(&mut stream, window_id) {
-            tracing::warn!(window_id, error = %e, "Failed to clear background image");
-        }
-    }
-
-    stream.flush()?;
-    tracing::debug!(window_count = window_ids.len(), "Background image clear commands sent");
+    tracing::debug!(window_count = window_ids.len(), "Window appearances reset");
     Ok(())
 }
 
@@ -932,66 +899,79 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                     );
 
                     let palette = Palette::new(&base_bg);
-                    let mut destinations = Vec::new();
-                    let mut modified_window_ids = Vec::new();
 
-                    // Process each found window and update UI incrementally
-                    for (i, window) in stentor_windows.iter().enumerate().take(8) {
-                        // Use the actual STENTOR_SLOT value from the window, not the button index
+                    // Collect window setup data for batched processing
+                    struct WindowSetup {
+                        window_id: u64,
+                        slot_num: usize,
+                        color: String,
+                        image_path: Option<std::path::PathBuf>,
+                        label: String,
+                    }
+
+                    let mut setups: Vec<WindowSetup> = Vec::new();
+                    for window in stentor_windows.iter().take(8) {
                         let slot_num = window.slot_num;
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                            // Get image path for this slot if available
-                            let image_path = slot_image_dir.as_ref().map(|dir| {
-                                dir.join(format!("slot_{slot_num}.png"))
-                            });
-                            let image_path_str = image_path.as_ref().map(|p| p.to_string_lossy());
-                            let image_path_ref = image_path_str.as_deref();
-
-                            // Set background color and image in one batched call
-                            if let Err(e) =
-                                set_window_color_and_image(color_hex, window.id, image_path_ref)
-                            {
-                                tracing::warn!(
-                                    window_id = window.id,
-                                    error = %e,
-                                    "Failed to set color and image"
-                                );
-                            } else {
-                                tracing::debug!(
-                                    window_id = window.id,
-                                    color = color_hex,
-                                    image = ?image_path_ref,
-                                    "Set window appearance"
-                                );
-                                modified_window_ids.push(window.id);
-                                // Store slot -> window_id mapping for output command
-                                slot_window_ids.lock().insert(slot_num, window.id);
-                            }
-
-                            // Create destination slot with label and send immediately
-                            // Parse the path to check if it's a worktree
+                            let image_path = slot_image_dir
+                                .as_ref()
+                                .map(|dir| dir.join(format!("slot_{slot_num}.png")));
                             let label = parse_worktree_label(&window.cwd);
-                            destinations.push(DestinationSlot::with_label(
-                                slot_num,
-                                label,
-                                color_hex.to_string(),
-                            ));
 
-                            // Update UI incrementally - send current state after each window is processed
-                            let mut current_destinations = destinations.clone();
-                            // Add remaining slots as inactive
-                            for j in (i + 1)..8 {
-                                current_destinations.push(DestinationSlot::inactive(j + 1));
-                            }
-                            tracing::debug!(
-                                "Background: Sending incremental update for slot {}",
-                                slot_num
-                            );
-                            let _ = ui_tx_for_kitty.send_blocking(
-                                HandlerUIMessage::SetDestinations(current_destinations),
-                            );
+                            setups.push(WindowSetup {
+                                window_id: window.id,
+                                slot_num,
+                                color: color_hex.to_string(),
+                                image_path,
+                                label,
+                            });
                         }
                     }
+
+                    // Batch all kitty socket calls in a single connection
+                    let appearances: Vec<WindowAppearance<'_>> = setups
+                        .iter()
+                        .map(|s| WindowAppearance {
+                            window_id: s.window_id,
+                            color: &s.color,
+                            image_path: s.image_path.as_deref(),
+                        })
+                        .collect();
+
+                    let mut modified_window_ids = Vec::new();
+                    if !appearances.is_empty() {
+                        if let Err(e) = set_window_appearances(&appearances) {
+                            tracing::warn!(error = %e, "Failed to set window appearances");
+                        } else {
+                            for setup in &setups {
+                                modified_window_ids.push(setup.window_id);
+                                slot_window_ids.lock().insert(setup.slot_num, setup.window_id);
+                            }
+                        }
+                    }
+
+                    // Build destinations for UI
+                    let mut destinations: Vec<DestinationSlot> = setups
+                        .iter()
+                        .map(|s| {
+                            DestinationSlot::with_label(
+                                s.slot_num,
+                                s.label.clone(),
+                                s.color.clone(),
+                            )
+                        })
+                        .collect();
+
+                    // Add inactive slots
+                    for slot in 1..=8 {
+                        if !destinations.iter().any(|d| d.slot_num == slot) {
+                            destinations.push(DestinationSlot::inactive(slot));
+                        }
+                    }
+                    destinations.sort_by_key(|d| d.slot_num);
+
+                    let _ = ui_tx_for_kitty
+                        .send_blocking(HandlerUIMessage::SetDestinations(destinations));
 
                     // Store window IDs for cleanup
                     if !modified_window_ids.is_empty() {
@@ -1024,17 +1004,12 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         tracing::info!(
             window_count = window_ids.len(),
             color = background_color,
-            "Resetting background colors and clearing images"
+            "Resetting window appearances"
         );
 
-        // Clear background images first
-        if let Err(e) = clear_window_background_images(&window_ids) {
-            tracing::warn!(error = %e, "Failed to clear background images");
-        }
-
-        // Then reset colors
-        if let Err(e) = reset_window_colors(&background_color, &window_ids) {
-            tracing::warn!(error = %e, "Failed to reset window colors");
+        // Clear images and reset colors in a single batched socket call
+        if let Err(e) = reset_window_appearances(&background_color, &window_ids) {
+            tracing::warn!(error = %e, "Failed to reset window appearances");
         }
 
         Ok(())
