@@ -1,8 +1,8 @@
 pub mod audio;
 pub mod config;
-pub mod defaults;
 pub mod daemon;
 pub mod daemon_app;
+pub mod defaults;
 pub mod dialog;
 pub mod keyboard;
 pub mod kitty;

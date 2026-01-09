@@ -96,7 +96,6 @@ fn generate_empty_image(output_path: &Path) -> Result<()> {
     Ok(())
 }
 
-
 /// Generate a slot image with the background color baked in.
 /// The image will have the specified background color and a contrasting number in the top-right corner.
 pub fn generate_colored_slot_image(
@@ -154,7 +153,9 @@ pub fn generate_colored_slot_image(
         let glyph_width = bounds.width();
 
         // Position in top-right corner with padding
-        let x_offset = (defaults::SLOT_IMAGE_WIDTH as f32 - glyph_width - defaults::SLOT_IMAGE_CORNER_PADDING) as i32;
+        let x_offset = (defaults::SLOT_IMAGE_WIDTH as f32
+            - glyph_width
+            - defaults::SLOT_IMAGE_CORNER_PADDING) as i32;
         let y_offset = defaults::SLOT_IMAGE_CORNER_PADDING as i32;
 
         // Draw the glyph with contrasting color, semi-transparent
