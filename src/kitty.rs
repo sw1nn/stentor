@@ -26,6 +26,7 @@ struct SetColorsPayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     colors: Option<HashMap<String, u32>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "match")]
     match_window: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reset: Option<bool>,
