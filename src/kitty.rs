@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -6,6 +7,7 @@ use std::env;
 use std::io::{Read, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::UnixStream;
+use std::path::Path;
 
 use crate::config::{parse_slot_matchers, SlotMatcher};
 use crate::constants::KITTY_SOCKET_TIMEOUT;
@@ -30,11 +32,18 @@ struct SetColorsPayload {
 }
 
 #[derive(Serialize)]
-struct SetUserVarsPayload {
+struct SetBackgroundImagePayload {
+    /// Base64-encoded image data chunk (max 512 bytes raw), empty string to signal end, or "-" to clear
+    data: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "match")]
     match_window: Option<String>,
-    #[serde(flatten)]
-    vars: HashMap<String, String>,
+    /// Layout mode: "scaled", "clamped", "configured", "tiled", "mirror-tiled"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    layout: Option<String>,
+    /// Stream ID for multi-chunk transfers
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stream_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -509,24 +518,12 @@ pub fn set_background_color(color: &str, window_id: u64) -> Result<()> {
     send_kitty_command(cmd)
 }
 
-/// Set both background color and environment variable in a single socket connection
-/// This is much faster than calling set_background_color and set_window_env_var separately
-/// Fire-and-forget style: sends both commands without waiting for responses
-pub fn set_window_color_and_env(
+/// Send a set-colors command to the socket (fire-and-forget).
+fn send_set_colors_cmd(
+    stream: &mut UnixStream,
     color: &str,
-    env_var_name: &str,
-    env_var_value: &str,
     window_id: u64,
 ) -> Result<()> {
-    let socket_name = get_kitty_socket_name()?;
-    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
-        .context("Failed to create abstract socket address")?;
-    let mut stream =
-        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
-
-    let match_window = Some(format!("id:{}", window_id));
-
-    // Build set-colors command
     let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
     let (fg_r, fg_g, fg_b) = get_contrast_color(color);
 
@@ -536,7 +533,7 @@ pub fn set_window_color_and_env(
 
     let color_payload = SetColorsPayload {
         colors: Some(colors),
-        match_window: match_window.clone(),
+        match_window: Some(format!("id:{window_id}")),
         reset: None,
     };
 
@@ -546,37 +543,169 @@ pub fn set_window_color_and_env(
         payload: Some(color_payload),
     };
 
-    // Build set-user-vars command
-    let mut vars = HashMap::new();
-    vars.insert(env_var_name.to_string(), env_var_value.to_string());
-
-    let env_payload = SetUserVarsPayload { match_window, vars };
-
-    let env_cmd = KittyCommand {
-        cmd: "set-user-vars".to_string(),
-        version: Some(vec![0, 35, 0]),
-        payload: Some(env_payload),
-    };
-
-    // Serialize both commands
     let color_json = serde_json::to_string(&color_cmd)?;
-    let env_json = serde_json::to_string(&env_cmd)?;
-
-    tracing::debug!(
-        "Sending batched commands for window {} (fire-and-forget)",
-        window_id
-    );
-
-    // Send both commands without waiting for responses (fire-and-forget)
-    let color_encoded = format!("\x1bP@kitty-cmd{}\x1b\\", color_json);
+    let color_encoded = format!("\x1bP@kitty-cmd{color_json}\x1b\\");
     stream.write_all(color_encoded.as_bytes())?;
 
-    let env_encoded = format!("\x1bP@kitty-cmd{}\x1b\\", env_json);
-    stream.write_all(env_encoded.as_bytes())?;
+    Ok(())
+}
 
+/// Maximum raw bytes per chunk for kitty image protocol
+const IMAGE_CHUNK_SIZE: usize = 512;
+
+/// Counter for generating unique stream IDs
+static STREAM_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Send a set-background-image command to the socket.
+/// The image data is read from the file and streamed in 512-byte chunks.
+fn send_set_background_image_cmd<P>(
+    stream: &mut UnixStream,
+    image_path: P,
+    window_id: u64,
+) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    let path = image_path.as_ref();
+    let image_data = std::fs::read(path)
+        .with_context(|| format!("Failed to read image file: {}", path.display()))?;
+
+    // Generate a unique stream ID for this transfer
+    let counter = STREAM_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let stream_id = format!("stentor_{}_{}", window_id, counter);
+    let match_window = format!("id:{window_id}");
+
+    tracing::debug!(
+        window_id,
+        stream_id,
+        chunks = image_data.len().div_ceil(IMAGE_CHUNK_SIZE),
+        "Streaming background image"
+    );
+
+    // Send data in chunks - include match on every chunk
+    for (i, chunk) in image_data.chunks(IMAGE_CHUNK_SIZE).enumerate() {
+        let encoded_chunk = base64::engine::general_purpose::STANDARD.encode(chunk);
+
+        let payload = SetBackgroundImagePayload {
+            data: encoded_chunk,
+            match_window: Some(match_window.clone()),
+            layout: if i == 0 { Some("scaled".to_string()) } else { None },
+            stream_id: Some(stream_id.clone()),
+        };
+
+        let cmd = KittyCommand {
+            cmd: "set-background-image".to_string(),
+            version: Some(vec![0, 26, 0]),
+            payload: Some(payload),
+        };
+
+        let json = serde_json::to_string(&cmd)?;
+        let encoded_cmd = format!("\x1bP@kitty-cmd{json}\x1b\\");
+        stream.write_all(encoded_cmd.as_bytes())?;
+    }
+
+    // Send empty data chunk to signal end of stream
+    let end_payload = SetBackgroundImagePayload {
+        data: String::new(),
+        match_window: Some(match_window),
+        layout: None,
+        stream_id: Some(stream_id.clone()),
+    };
+
+    let end_cmd = KittyCommand {
+        cmd: "set-background-image".to_string(),
+        version: Some(vec![0, 26, 0]),
+        payload: Some(end_payload),
+    };
+
+    let end_json = serde_json::to_string(&end_cmd)?;
+    let end_encoded = format!("\x1bP@kitty-cmd{end_json}\x1b\\");
+    stream.write_all(end_encoded.as_bytes())?;
+
+    // Flush after completing the image transfer
     stream.flush()?;
 
-    tracing::debug!("Batched commands sent for window {}", window_id);
+    tracing::debug!(window_id, stream_id, "Background image stream complete");
+    Ok(())
+}
+
+/// Send a command to clear the background image.
+fn send_clear_background_image_cmd(
+    stream: &mut UnixStream,
+    window_id: u64,
+) -> Result<()> {
+    let payload = SetBackgroundImagePayload {
+        data: "-".to_string(),
+        match_window: Some(format!("id:{window_id}")),
+        layout: None,
+        stream_id: None,
+    };
+
+    let cmd = KittyCommand {
+        cmd: "set-background-image".to_string(),
+        version: Some(vec![0, 26, 0]),
+        payload: Some(payload),
+    };
+
+    let json = serde_json::to_string(&cmd)?;
+    let encoded_cmd = format!("\x1bP@kitty-cmd{json}\x1b\\");
+    stream.write_all(encoded_cmd.as_bytes())?;
+
+    Ok(())
+}
+
+/// Set background color and optionally background image via socket protocol.
+pub fn set_window_color_and_image<P>(
+    color: &str,
+    window_id: u64,
+    image_path: Option<P>,
+) -> Result<()>
+where
+    P: AsRef<Path>,
+{
+    let socket_name = get_kitty_socket_name()?;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
+        .context("Failed to create abstract socket address")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
+
+    // Set a read timeout for responses
+    stream.set_read_timeout(Some(std::time::Duration::from_millis(500)))?;
+
+    tracing::debug!(
+        window_id,
+        has_image = image_path.is_some(),
+        "Setting window color and image"
+    );
+
+    // Set color (fire-and-forget is fine for colors)
+    send_set_colors_cmd(&mut stream, color, window_id)?;
+    stream.flush()?;
+
+    // Set background image if provided - need to wait for completion
+    if let Some(path) = image_path {
+        send_set_background_image_cmd(&mut stream, path, window_id)?;
+
+        // Read and discard any response to ensure the transfer completes
+        let mut response_buf = vec![0u8; 4096];
+        loop {
+            match stream.read(&mut response_buf) {
+                Ok(0) => break, // EOF
+                Ok(_n) => {
+                    // Got response, check if it looks like completion
+                    // Continue reading until timeout or EOF
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
+                Err(e) if e.kind() == std::io::ErrorKind::TimedOut => break,
+                Err(e) => {
+                    tracing::trace!(window_id, error = %e, "Error reading response");
+                    break;
+                }
+            }
+        }
+    }
+
+    tracing::debug!(window_id, "Window appearance updated");
     Ok(())
 }
 
@@ -627,10 +756,40 @@ pub fn reset_window_colors(color: &str, window_ids: &[u64]) -> Result<()> {
     Ok(())
 }
 
+/// Clear background images for multiple windows via socket protocol.
+/// Fire-and-forget style: sends all commands without waiting for responses.
+pub fn clear_window_background_images(window_ids: &[u64]) -> Result<()> {
+    if window_ids.is_empty() {
+        return Ok(());
+    }
+
+    let socket_name = get_kitty_socket_name()?;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
+        .context("Failed to create abstract socket address")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
+
+    tracing::debug!(
+        window_count = window_ids.len(),
+        "Clearing window background images"
+    );
+
+    for &window_id in window_ids {
+        if let Err(e) = send_clear_background_image_cmd(&mut stream, window_id) {
+            tracing::warn!(window_id, error = %e, "Failed to clear background image");
+        }
+    }
+
+    stream.flush()?;
+    tracing::debug!(window_count = window_ids.len(), "Background image clear commands sent");
+    Ok(())
+}
+
 use crate::config::KittyConfig;
 use crate::dialog::DestinationSlot;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler};
 use crate::palette::Palette;
+use crate::slot_images;
 use async_channel::Sender;
 use std::thread;
 
@@ -750,9 +909,19 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         let base_bg = self.config.base_background_color.clone();
         let slot_matchers = parse_slot_matchers(&self.config.slot_matches);
         let slot_window_ids = std::sync::Arc::clone(&self.slot_window_ids);
+        let slot_id_font = self.config.slot_id_font.clone();
 
         thread::spawn(move || {
             tracing::info!("Background: Starting Kitty window discovery");
+
+            // Ensure slot images are generated
+            let slot_image_dir = match slot_images::ensure_slot_images(&slot_id_font) {
+                Ok(dir) => Some(dir),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to generate slot images, continuing without background images");
+                    None
+                }
+            };
 
             match list_kitty_windows() {
                 Ok(data) => {
@@ -771,22 +940,28 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         // Use the actual STENTOR_SLOT value from the window, not the button index
                         let slot_num = window.slot_num;
                         if let Some((_name, color_hex)) = palette.get_slot_color(slot_num) {
-                            // Set background color and env var in one batched call
-                            let env_var_name = format!("STENTOR_SLOT_{}", slot_num);
+                            // Get image path for this slot if available
+                            let image_path = slot_image_dir.as_ref().map(|dir| {
+                                dir.join(format!("slot_{slot_num}.png"))
+                            });
+                            let image_path_str = image_path.as_ref().map(|p| p.to_string_lossy());
+                            let image_path_ref = image_path_str.as_deref();
+
+                            // Set background color and image in one batched call
                             if let Err(e) =
-                                set_window_color_and_env(color_hex, &env_var_name, "1", window.id)
+                                set_window_color_and_image(color_hex, window.id, image_path_ref)
                             {
                                 tracing::warn!(
-                                    "Failed to set color and env var for window {}: {}",
-                                    window.id,
-                                    e
+                                    window_id = window.id,
+                                    error = %e,
+                                    "Failed to set color and image"
                                 );
                             } else {
                                 tracing::debug!(
-                                    "Set color {} and env var {} for window {}",
-                                    color_hex,
-                                    env_var_name,
-                                    window.id
+                                    window_id = window.id,
+                                    color = color_hex,
+                                    image = ?image_path_ref,
+                                    "Set window appearance"
                                 );
                                 modified_window_ids.push(window.id);
                                 // Store slot -> window_id mapping for output command
@@ -849,9 +1024,15 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         tracing::info!(
             window_count = window_ids.len(),
             color = background_color,
-            "Resetting background colors"
+            "Resetting background colors and clearing images"
         );
 
+        // Clear background images first
+        if let Err(e) = clear_window_background_images(&window_ids) {
+            tracing::warn!(error = %e, "Failed to clear background images");
+        }
+
+        // Then reset colors
         if let Err(e) = reset_window_colors(&background_color, &window_ids) {
             tracing::warn!(error = %e, "Failed to reset window colors");
         }
@@ -1544,4 +1725,34 @@ mod tests {
         });
         assert!(matches_foreground_process(&window, &matchers));
     }
+}
+
+#[test]
+fn test_background_image_json_format() {
+    use base64::Engine;
+
+    let test_data = b"PNG_TEST";
+    let encoded = base64::engine::general_purpose::STANDARD.encode(test_data);
+
+    let payload = SetBackgroundImagePayload {
+        data: encoded,
+        match_window: Some("id:123".to_string()),
+        layout: Some("scaled".to_string()),
+        stream_id: Some("test_stream".to_string()),
+    };
+
+    let cmd = KittyCommand {
+        cmd: "set-background-image".to_string(),
+        version: Some(vec![0, 26, 0]),
+        payload: Some(payload),
+    };
+
+    let json = serde_json::to_string(&cmd).unwrap();
+    println!("JSON: {}", json);
+
+    // Check that fields are present and match is renamed correctly
+    assert!(json.contains("\"match\":"), "Should have 'match' field, got: {}", json);
+    assert!(json.contains("\"data\":"), "Should have 'data' field");
+    assert!(json.contains("\"layout\":"), "Should have 'layout' field");
+    assert!(json.contains("\"stream_id\":"), "Should have 'stream_id' field");
 }

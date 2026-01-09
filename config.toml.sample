@@ -84,3 +84,9 @@ language = "en"
 #
 # Example:
 #output-command = "kitty @ send-text --match id:$WINDOW_ID -- \"$TRANSCRIPTION\""
+
+# Font for slot number background images
+# Uses fontconfig pattern syntax (e.g., "DejaVu Sans Mono:bold", "monospace:bold")
+# The font is used to render large slot numbers (1-8) as background images
+# Default: "monospace:bold"
+#slot-id-font = "monospace:bold"

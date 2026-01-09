@@ -56,6 +56,14 @@ thiserror = "2"
 # Pattern matching
 regex = "1"
 
+# Image generation for slot number overlays
+image = { version = "0.25", default-features = false, features = ["png"] }
+ab_glyph = "0.2"
+fontconfig = "0.10"
+
+# Base64 encoding for kitty image protocol
+base64 = "0.22"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

@@ -9,5 +9,6 @@ pub mod kitty;
 pub mod multi_slot;
 pub mod palette;
 pub mod recording;
+pub mod slot_images;
 pub mod source_mute;
 pub mod transcription;

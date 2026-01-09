@@ -106,6 +106,12 @@ pub struct KittyConfig {
     /// - "hypr-class:regex" - match Hyprland window class
     #[serde(default, alias = "slot-matches")]
     pub slot_matches: Vec<String>,
+
+    /// Font name for slot ID background images.
+    /// Uses fontconfig pattern syntax (e.g., "DejaVu Sans Mono:bold").
+    /// Defaults to "monospace:bold" if not specified.
+    #[serde(default = "default_slot_id_font", alias = "slot-id-font")]
+    pub slot_id_font: String,
 }
 
 impl Default for KittyConfig {
@@ -115,12 +121,17 @@ impl Default for KittyConfig {
             base_background_color: default_kitty_base_background(),
             output_command: None,
             slot_matches: Vec::new(),
+            slot_id_font: default_slot_id_font(),
         }
     }
 }
 
 fn default_kitty_base_background() -> String {
     "#1e1e2e".to_string()
+}
+
+fn default_slot_id_font() -> String {
+    "monospace:bold".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
