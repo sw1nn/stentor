@@ -970,7 +970,7 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         );
 
         // Get empty image path for clearing backgrounds
-        let empty_image_path = match slot_images::get_empty_image_path(&self.config.slot_id_font) {
+        let empty_image_path = match slot_images::get_empty_image_path() {
             Ok(path) => path,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to get empty image path");
