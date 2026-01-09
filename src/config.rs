@@ -570,5 +570,4 @@ mod tests {
         assert_eq!(kitty_config.slot_matches[0], "cmd:claude");
         assert_eq!(kitty_config.slot_matches[1], "hypr-title:Test.*");
     }
-
 }

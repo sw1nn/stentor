@@ -9,7 +9,7 @@ use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use crate::config::{parse_slot_matchers, SlotMatcher};
+use crate::config::{SlotMatcher, parse_slot_matchers};
 use crate::constants::KITTY_SOCKET_TIMEOUT;
 
 #[derive(Serialize)]
@@ -46,7 +46,6 @@ struct SetBackgroundImagePayload {
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_id: Option<String>,
 }
-
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ClaudeWindow {
@@ -521,11 +520,7 @@ pub fn set_background_color(color: &str, window_id: u64) -> Result<()> {
 }
 
 /// Send a set-colors command to the socket (fire-and-forget).
-fn send_set_colors_cmd(
-    stream: &mut UnixStream,
-    color: &str,
-    window_id: u64,
-) -> Result<()> {
+fn send_set_colors_cmd(stream: &mut UnixStream, color: &str, window_id: u64) -> Result<()> {
     let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
     let (fg_r, fg_g, fg_b) = get_contrast_color(color);
 
@@ -593,7 +588,11 @@ where
         let payload = SetBackgroundImagePayload {
             data: encoded_chunk,
             match_window: Some(match_window.clone()),
-            layout: if i == 0 { Some("scaled".to_string()) } else { None },
+            layout: if i == 0 {
+                Some("scaled".to_string())
+            } else {
+                None
+            },
             stream_id: Some(stream_id.clone()),
         };
 
@@ -672,7 +671,11 @@ pub fn set_window_appearances(windows: &[WindowAppearance<'_>]) -> Result<()> {
 /// Reset window appearances: clear background images and reset colors.
 /// Single socket connection for best performance.
 /// The `empty_image_path` should point to a transparent PNG used to clear backgrounds.
-pub fn reset_window_appearances<P>(color: &str, window_ids: &[u64], empty_image_path: P) -> Result<()>
+pub fn reset_window_appearances<P>(
+    color: &str,
+    window_ids: &[u64],
+    empty_image_path: P,
+) -> Result<()>
 where
     P: AsRef<Path>,
 {
@@ -902,7 +905,9 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         } else {
                             for setup in &setups {
                                 modified_window_ids.push(setup.window_id);
-                                slot_window_ids.lock().insert(setup.slot_num, setup.window_id);
+                                slot_window_ids
+                                    .lock()
+                                    .insert(setup.slot_num, setup.window_id);
                             }
                         }
                     }
@@ -974,7 +979,8 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         };
 
         // Clear images and reset colors in a single batched socket call
-        if let Err(e) = reset_window_appearances(&background_color, &window_ids, &empty_image_path) {
+        if let Err(e) = reset_window_appearances(&background_color, &window_ids, &empty_image_path)
+        {
             tracing::warn!(error = %e, "Failed to reset window appearances");
         }
 
@@ -1692,8 +1698,15 @@ fn test_background_image_json_format() {
     println!("JSON: {}", json);
 
     // Check that fields are present and match is renamed correctly
-    assert!(json.contains("\"match\":"), "Should have 'match' field, got: {}", json);
+    assert!(
+        json.contains("\"match\":"),
+        "Should have 'match' field, got: {}",
+        json
+    );
     assert!(json.contains("\"data\":"), "Should have 'data' field");
     assert!(json.contains("\"layout\":"), "Should have 'layout' field");
-    assert!(json.contains("\"stream_id\":"), "Should have 'stream_id' field");
+    assert!(
+        json.contains("\"stream_id\":"),
+        "Should have 'stream_id' field"
+    );
 }

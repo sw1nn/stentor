@@ -111,8 +111,7 @@ fn get_cache_dir() -> Result<PathBuf> {
 /// Generate all 8 slot images plus an empty image for clearing.
 fn generate_all_slot_images(cache_dir: &Path, font_pattern: &str) -> Result<()> {
     let font_data = load_font_data(font_pattern)?;
-    let font = FontRef::try_from_slice(&font_data)
-        .context("Failed to parse font data")?;
+    let font = FontRef::try_from_slice(&font_data).context("Failed to parse font data")?;
 
     for slot_num in 1..=8 {
         let path = cache_dir.join(format!("slot_{slot_num}.png"));
@@ -153,7 +152,9 @@ fn generate_slot_image(font: &FontRef<'_>, slot_num: usize, output_path: &Path) 
     );
 
     // Calculate glyph metrics for centering
-    let glyph = font.glyph_id(digit.chars().next().unwrap()).with_scale(scale);
+    let glyph = font
+        .glyph_id(digit.chars().next().unwrap())
+        .with_scale(scale);
 
     if let Some(outlined) = font.outline_glyph(glyph) {
         let bounds = outlined.px_bounds();
@@ -188,7 +189,8 @@ fn generate_slot_image(font: &FontRef<'_>, slot_num: usize, output_path: &Path) 
         });
     }
 
-    image.save(output_path)
+    image
+        .save(output_path)
         .with_context(|| format!("Failed to save slot image to {:?}", output_path))?;
 
     Ok(())
@@ -208,8 +210,8 @@ pub fn generate_colored_slot_image(
         anyhow::bail!("Invalid slot number: {slot_num} (must be 1-8)");
     }
 
-    let (bg_r, bg_g, bg_b) = hex_to_rgb(bg_color_hex)
-        .with_context(|| format!("Invalid hex color: {bg_color_hex}"))?;
+    let (bg_r, bg_g, bg_b) =
+        hex_to_rgb(bg_color_hex).with_context(|| format!("Invalid hex color: {bg_color_hex}"))?;
 
     // Normalize color for filename (lowercase, no #)
     let color_normalized = bg_color_hex.trim_start_matches('#').to_lowercase();
@@ -219,7 +221,11 @@ pub fn generate_colored_slot_image(
 
     // Check if already cached
     if output_path.exists() {
-        tracing::trace!(slot_num, color = bg_color_hex, "Using cached colored slot image");
+        tracing::trace!(
+            slot_num,
+            color = bg_color_hex,
+            "Using cached colored slot image"
+        );
         return Ok(output_path);
     }
 
@@ -231,17 +237,16 @@ pub fn generate_colored_slot_image(
     let digit = slot_num.to_string();
 
     // Create image with background color
-    let mut image: RgbaImage = ImageBuffer::from_pixel(
-        IMAGE_WIDTH,
-        IMAGE_HEIGHT,
-        Rgba([bg_r, bg_g, bg_b, 255]),
-    );
+    let mut image: RgbaImage =
+        ImageBuffer::from_pixel(IMAGE_WIDTH, IMAGE_HEIGHT, Rgba([bg_r, bg_g, bg_b, 255]));
 
     // Get contrasting text color
     let (text_r, text_g, text_b) = get_contrast_color(bg_r, bg_g, bg_b);
 
     // Calculate glyph metrics for top-right positioning
-    let glyph = font.glyph_id(digit.chars().next().unwrap()).with_scale(scale);
+    let glyph = font
+        .glyph_id(digit.chars().next().unwrap())
+        .with_scale(scale);
 
     if let Some(outlined) = font.outline_glyph(glyph) {
         let bounds = outlined.px_bounds();
@@ -319,7 +324,10 @@ mod tests {
     #[test]
     fn test_generate_colored_slot_image() {
         let result = generate_colored_slot_image(1, "#ff5733", "monospace:bold");
-        assert!(result.is_ok(), "Failed to generate colored slot image: {result:?}");
+        assert!(
+            result.is_ok(),
+            "Failed to generate colored slot image: {result:?}"
+        );
         let path = result.unwrap();
         assert!(path.exists(), "Generated image should exist at {path:?}");
         assert!(
