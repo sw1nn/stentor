@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.29.1 - 2026-01-09
+#### Documentation
+- update README with slot-matches window discovery - (fb97a09) - Neale Swinnerton
+#### Refactoring
+- (**slot_images**) remove dead code for transparent slot images - (9d27dd1) - Neale Swinnerton
+- rename constants.rs to defaults.rs - (082d9b8) - Neale Swinnerton
+#### Miscellaneous Chores
+- (**logging**) demote verbose logs to debug level - (70a4c84) - Neale Swinnerton
+#### Style
+- apply cargo fmt - (1879ba1) - Neale Swinnerton
+
+- - -
+
 ## v0.29.0 - 2026-01-09
 #### Features
 - (**kitty**) add background images with slot numbers - (6b51309) - Neale Swinnerton
