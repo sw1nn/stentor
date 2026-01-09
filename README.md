@@ -100,6 +100,8 @@ cp config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 | `background-color-cmd` | none | Command to retrieve current background color |
 | `base-background-color` | `"#1e1e2e"` | Fallback background color |
 | `output-command` | none | Kitty-specific output command template |
+| `slot-matches` | `[]` | Patterns for auto-discovering windows (see below) |
+| `slot-id-font` | `"monospace:bold"` | Font for slot number background images |
 
 ### Example Configuration
 
@@ -117,6 +119,8 @@ multi-slot-handler = "kitty"
 
 [kitty]
 base-background-color = "#1e1e2e"
+# Auto-discover windows running claude or nvim
+slot-matches = ["claude", "nvim"]
 ```
 
 ## Usage
@@ -178,11 +182,30 @@ During recording, shortcuts stop recording and auto-send. During review, they se
 
 ## Multi-Slot Mode (Kitty Terminal)
 
-Stentor can send transcriptions to multiple Kitty terminal windows simultaneously. Each window is assigned a colored slot (1-8) for visual identification.
+Stentor can send transcriptions to multiple Kitty terminal windows simultaneously. Each window is assigned a colored slot (1-8) for visual identification with a large slot number displayed in the top-right corner.
 
-### Setup
+### Window Discovery
 
-1. Launch terminal windows with `STENTOR_SLOT` environment variable:
+Windows can be discovered in two ways:
+
+#### 1. Automatic Discovery (Recommended)
+
+Configure `slot-matches` to automatically discover windows based on the foreground process:
+
+```toml
+[kitty]
+# Match windows running claude or nvim
+slot-matches = ["claude", "nvim"]
+
+# With explicit prefix (equivalent)
+slot-matches = ["cmd:claude", "cmd:nvim"]
+```
+
+Windows are auto-assigned slot numbers 1-8 in order of discovery (sorted by window ID).
+
+#### 2. Explicit Slot Assignment
+
+Launch windows with the `STENTOR_SLOT` environment variable for explicit slot assignment:
 
 ```bash
 # Launch a new Kitty window with slot assignment
@@ -192,21 +215,27 @@ stentorctl launch zsh
 STENTOR_SLOT=1 kitty
 ```
 
-2. Start transcription with the Kitty handler:
+Explicit assignments take priority - auto-discovered windows skip occupied slots.
+
+### Usage
+
+1. Start transcription with the Kitty handler:
 
 ```bash
 stentorctl transcribe --multi-slot-handler=kitty
 ```
 
+2. Matching windows get a colored background with their slot number displayed
 3. The dialog shows color-coded destination buttons for each discovered window
 4. Press `Alt+1` through `Alt+8` to send to specific slots, or `Alt+Enter` for all
 
 ### How It Works
 
-- Windows with `STENTOR_SLOT` env var are discovered via Kitty's remote control API
+- Windows are discovered via Kitty's remote control API
 - Each slot gets a unique background color from a Catppuccin-based palette
+- A large slot number (1-8) is displayed in the top-right corner of each window
 - Window labels show the git repository and branch name (if in a git worktree)
-- Colors reset to your base background when the dialog closes
+- Background images and colors reset when the dialog closes
 
 ## Output Commands
 
