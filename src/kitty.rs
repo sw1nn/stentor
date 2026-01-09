@@ -580,6 +580,53 @@ pub fn set_window_color_and_env(
     Ok(())
 }
 
+/// Reset background colors for multiple windows in a single socket connection.
+/// Fire-and-forget style: sends all commands without waiting for responses.
+pub fn reset_window_colors(color: &str, window_ids: &[u64]) -> Result<()> {
+    if window_ids.is_empty() {
+        return Ok(());
+    }
+
+    let socket_name = get_kitty_socket_name()?;
+    let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
+        .context("Failed to create abstract socket address")?;
+    let mut stream =
+        UnixStream::connect_addr(&addr).context("Failed to connect to Kitty socket")?;
+
+    let (bg_r, bg_g, bg_b) = hex_to_rgb(color).unwrap_or((128, 128, 128));
+    let (fg_r, fg_g, fg_b) = get_contrast_color(color);
+
+    tracing::debug!(
+        color,
+        window_count = window_ids.len(),
+        "Resetting window colors (fire-and-forget)"
+    );
+
+    for &window_id in window_ids {
+        let mut colors = HashMap::new();
+        colors.insert("background".to_string(), rgb_to_int(bg_r, bg_g, bg_b));
+        colors.insert("foreground".to_string(), rgb_to_int(fg_r, fg_g, fg_b));
+
+        let cmd = KittyCommand {
+            cmd: "set-colors".to_string(),
+            version: Some(vec![0, 26, 0]),
+            payload: Some(SetColorsPayload {
+                colors: Some(colors),
+                match_window: Some(format!("id:{}", window_id)),
+                reset: None,
+            }),
+        };
+
+        let json = serde_json::to_string(&cmd)?;
+        let encoded = format!("\x1bP@kitty-cmd{}\x1b\\", json);
+        stream.write_all(encoded.as_bytes())?;
+    }
+
+    stream.flush()?;
+    tracing::debug!(window_count = window_ids.len(), "Window color reset commands sent");
+    Ok(())
+}
+
 use crate::config::KittyConfig;
 use crate::dialog::DestinationSlot;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler};
@@ -800,21 +847,13 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
 
         let background_color = self.get_background_color();
         tracing::info!(
-            "Resetting background color for {} Kitty windows to {}",
-            window_ids.len(),
-            background_color
+            window_count = window_ids.len(),
+            color = background_color,
+            "Resetting background colors"
         );
 
-        for window_id in window_ids {
-            if let Err(e) = set_background_color(&background_color, window_id) {
-                tracing::warn!(
-                    "Failed to reset background color for window {}: {}",
-                    window_id,
-                    e
-                );
-            } else {
-                tracing::debug!("Reset background color for window {}", window_id);
-            }
+        if let Err(e) = reset_window_colors(&background_color, &window_ids) {
+            tracing::warn!(error = %e, "Failed to reset window colors");
         }
 
         Ok(())
