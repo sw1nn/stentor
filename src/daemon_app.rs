@@ -13,8 +13,8 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::audio::{AudioRecorder, RecordingCommand};
 use crate::config::{Config, ConfigFile};
-use crate::defaults;
 use crate::daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
+use crate::defaults;
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler as MultiSlotHandlerTrait};
@@ -59,7 +59,7 @@ pub async fn run(
         let dialog = TranscriptionDialog::new(app);
         dialog.hide();
         *current_dialog_for_startup.borrow_mut() = Some(dialog);
-        tracing::info!("Created persistent dialog (hidden)");
+        tracing::debug!("Created persistent dialog (hidden)");
     });
 
     // Add a dummy activate handler to suppress GTK warning
@@ -208,20 +208,20 @@ pub async fn run(
                                             .set_confirmed_and_preview(&confirmed, &preview);
                                     }
                                     SetDestinations(destinations) => {
-                                        tracing::info!("Updating destinations with {} slots", destinations.len());
+                                        tracing::debug!("Updating destinations with {} slots", destinations.len());
                                         dialog_for_updates.set_destinations(&destinations);
                                     }
                                     StoreHandlerWindowIds(window_ids) => {
-                                        tracing::info!("Storing {} handler window IDs for cleanup", window_ids.len());
+                                        tracing::debug!("Storing {} handler window IDs for cleanup", window_ids.len());
                                         *kitty_window_ids.lock() = window_ids;
                                     }
                                     CloseImmediately => {
-                                        tracing::info!("Hiding dialog immediately (background processing will continue)");
+                                        tracing::debug!("Hiding dialog immediately (background processing will continue)");
                                         dialog_for_updates.hide();
                                         // Don't break - wait for AutoSendText to do cleanup and close
                                     }
                                     AutoSendText(text, dest_num) => {
-                                        tracing::info!("AutoSendText received: dest_num={}, text='{}'", dest_num, text);
+                                        tracing::debug!(dest_num, text = %text, "AutoSendText received");
 
                                         // Execute output command in background
                                         let cmd_str = output_command_for_auto_send.clone();
@@ -231,25 +231,25 @@ pub async fn run(
                                             .unwrap_or_default();
                                         tracing::info!("Output command configured: {:?}", cmd_str);
                                         std::thread::spawn(move || {
-                                            tracing::info!("Background thread started for slot {}", dest_num);
+                                            tracing::debug!("Background thread started for slot {}", dest_num);
                                             if let Some(ref cmd) = cmd_str {
                                                 tracing::info!("Executing output command for slot {}: {}", dest_num, cmd);
                                                 execute_output_command(cmd, &text, dest_num, &extra_env_vars);
-                                                tracing::info!("Output command execution complete for slot {}", dest_num);
+                                                tracing::debug!("Output command execution complete for slot {}", dest_num);
                                             } else {
                                                 tracing::warn!("No output command configured for sending text");
                                             }
-                                            tracing::info!("Background processing complete for slot {}", dest_num);
+                                            tracing::debug!("Background processing complete for slot {}", dest_num);
                                         });
                                         // Don't break - continue processing more AutoSendText messages
                                     }
                                     Close => {
-                                        tracing::info!("Hiding dialog and cleaning up state");
+                                        tracing::debug!("Hiding dialog and cleaning up state");
 
                                         // Stop recording thread if it's still running
                                         let stop_tx_lock = stop_tx_for_cleanup.lock();
                                         if let Some(ref tx) = *stop_tx_lock {
-                                            tracing::info!("Sending stop command to recording thread");
+                                            tracing::debug!("Sending stop command to recording thread");
                                             let _ = tx.send(RecordingCommand::Stop);
                                         }
                                         drop(stop_tx_lock);
@@ -322,7 +322,7 @@ pub async fn run(
                             let handler_for_send = handler.clone();
                             let kitty_window_ids_for_send = Arc::clone(&kitty_window_ids_for_callbacks);
                             dialog.set_on_send_text(move |text, dest_num| {
-                                tracing::info!("Sending text to destination {}: {}", dest_num, text);
+                                tracing::debug!(dest_num, text = %text, "Sending text to destination");
 
                                 // Close dialog immediately for better UX
                                 tracing::info!("Closing dialog immediately (output command continues in background)");
@@ -459,7 +459,7 @@ pub async fn run(
                             auto_send_for_recording.lock().clear();
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
-                            tracing::info!("Recording thread finished, cleared recording_active flag");
+                            tracing::debug!("Recording thread finished, cleared recording_active flag");
                         });
                 }
                 Stop { command_slot } => {

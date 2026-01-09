@@ -340,7 +340,7 @@ pub fn start_recording_session(
                             // Clone audio for transcription
                             let audio_for_transcription: Vec<Vec<f32>> = recorded_audio.clone();
 
-                            tracing::info!(
+                            tracing::debug!(
                                 total_chunks,
                                 settled_chunks,
                                 current_confirmed,
@@ -566,7 +566,7 @@ pub fn start_recording_session(
                         }
 
                         if result.should_stop {
-                            tracing::info!(
+                            tracing::debug!(
                                 "VAD detected end of speech (silence duration exceeded)"
                             );
                             break;
@@ -602,7 +602,7 @@ pub fn start_recording_session(
     let mut final_text = confirmed_text.lock().clone();
     let current_confirmed_idx = *confirmed_chunks.lock();
 
-    tracing::info!(
+    tracing::debug!(
         confirmed_text = %final_text,
         confirmed_chunks = current_confirmed_idx,
         total_chunks = recorded_audio.len(),
@@ -616,7 +616,7 @@ pub fn start_recording_session(
         slots.clear(); // Clear for next session
         result
     };
-    tracing::info!(auto_slots = ?auto_slots, "Auto-send slots");
+    tracing::debug!(auto_slots = ?auto_slots, "Auto-send slots");
 
     // Transcribe any remaining unconfirmed audio
     if current_confirmed_idx < recorded_audio.len() {
@@ -639,7 +639,7 @@ pub fn start_recording_session(
                         final_text.push(' ');
                     }
                     final_text.push_str(&cleaned);
-                    tracing::info!(final_text = %final_text, "Added remaining audio to final text");
+                    tracing::debug!(final_text = %final_text, "Added remaining audio to final text");
                 }
             }
             Err(e) => {
@@ -659,7 +659,7 @@ pub fn start_recording_session(
         match transcriber.transcribe(&audio_flat) {
             Ok(result) => {
                 let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
-                tracing::info!(result = %cleaned, "Full transcription result");
+                tracing::debug!(result = %cleaned, "Full transcription result");
                 if !cleaned.is_empty() {
                     final_text = cleaned;
                 }
@@ -697,7 +697,7 @@ pub fn start_recording_session(
         // Send Close message after all AutoSendText messages to cleanup and hide dialog
         let _ = ui_tx.send_blocking(UIMessage::Close);
     } else {
-        tracing::info!(text = %final_text, "Showing text for review");
+        tracing::debug!(text = %final_text, "Showing text for review");
         let _ = ui_tx.send_blocking(UIMessage::SetText(final_text));
         let _ = ui_tx.send_blocking(UIMessage::UpdateState(
             TranscriptionState::Reviewing,

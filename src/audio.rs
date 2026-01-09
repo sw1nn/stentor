@@ -293,7 +293,7 @@ impl AudioRecorder {
             loop {
                 // Check for stop command
                 if let Ok(RecordingCommand::Stop) = cmd_rx.lock().try_recv() {
-                    tracing::info!("Stop command received in audio thread");
+                    tracing::debug!("Stop command received in audio thread");
                     break;
                 }
 
@@ -327,7 +327,7 @@ impl AudioRecorder {
                 }
             }
 
-            tracing::info!("Audio recording thread exiting");
+            tracing::debug!("Audio recording thread exiting");
         });
 
         Ok(())

@@ -783,14 +783,14 @@ impl KittyMultiSlotHandler {
     fn get_background_color(&self) -> String {
         // If a custom command is configured, try to use it
         if let Some(cmd) = &self.config.background_color_cmd {
-            tracing::info!("Retrieving background color using command: {}", cmd);
+            tracing::debug!(cmd, "Retrieving background color using command");
 
             match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
                 Ok(output) => {
                     if output.status.success() {
                         let color = String::from_utf8_lossy(&output.stdout).trim().to_string();
                         if !color.is_empty() {
-                            tracing::info!("Retrieved background color: {}", color);
+                            tracing::debug!(color, "Retrieved background color");
                             return color;
                         } else {
                             tracing::warn!("Command returned empty output, using default");
