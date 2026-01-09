@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::UnixStream;
 
+use crate::config::{parse_slot_matchers, SlotMatcher};
 use crate::constants::KITTY_SOCKET_TIMEOUT;
 
 #[derive(Serialize)]
@@ -207,8 +208,36 @@ pub fn list_kitty_windows() -> Result<Value> {
     anyhow::bail!("Failed to parse Kitty response")
 }
 
-pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
-    let mut stentor_windows: Vec<(usize, ClaudeWindow)> = Vec::new();
+/// Check if any foreground process command matches the configured slot matchers (cmd: type).
+fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> bool {
+    if matchers.is_empty() {
+        return false;
+    }
+
+    if let Some(fg_processes) = window
+        .get("foreground_processes")
+        .and_then(|p| p.as_array())
+    {
+        for process in fg_processes {
+            if let Some(cmdline) = process.get("cmdline").and_then(|c| c.as_array())
+                && let Some(cmd) = cmdline.first().and_then(|c| c.as_str())
+            {
+                // Extract just the command name (basename) for comparison
+                let cmd_name = cmd.rsplit('/').next().unwrap_or(cmd);
+                if matchers.iter().any(|m| m.matches_cmd(cmd_name)) {
+                    tracing::trace!(cmd_name, "Foreground process matches slot matcher");
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<ClaudeWindow> {
+    // Collect candidate windows: (id, cwd, explicit_slot)
+    // explicit_slot is Some if STENTOR_SLOT env var is set, None for auto-assign
+    let mut candidates: Vec<(u64, String, Option<usize>)> = Vec::new();
 
     if let Some(os_windows) = data.as_array() {
         tracing::debug!("Scanning {} OS window(s)", os_windows.len());
@@ -217,42 +246,50 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
                 for tab in tabs {
                     if let Some(windows) = tab.get("windows").and_then(|w| w.as_array()) {
                         for window in windows {
-                            // Check if window has STENTOR_SLOT env var and extract its value
-                            let slot_number =
+                            let Some(id) = window.get("id").and_then(|i| i.as_u64()) else {
+                                continue;
+                            };
+
+                            // Check for explicit STENTOR_SLOT env var
+                            let explicit_slot =
                                 if let Some(env) = window.get("env").and_then(|e| e.as_object()) {
-                                    if let Some(slot_str) =
-                                        env.get("STENTOR_SLOT").and_then(|v| v.as_str())
-                                    {
-                                        slot_str.parse::<usize>().ok()
-                                    } else {
-                                        None
-                                    }
+                                    env.get("STENTOR_SLOT")
+                                        .and_then(|v| v.as_str())
+                                        .and_then(|s| s.parse::<usize>().ok())
                                 } else {
                                     None
                                 };
 
-                            if slot_number.is_none() {
+                            // Include window if it has explicit slot OR matches any slot matcher
+                            let should_include = explicit_slot.is_some()
+                                || matches_foreground_process(window, matchers);
+
+                            if !should_include {
                                 continue;
                             }
 
-                            let slot_num = slot_number.unwrap();
+                            let cwd = window
+                                .get("cwd")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("unknown")
+                                .to_string();
 
-                            // Window has STENTOR_SLOT - include it
-                            if let Some(id) = window.get("id").and_then(|i| i.as_u64()) {
-                                let cwd = window
-                                    .get("cwd")
-                                    .and_then(|c| c.as_str())
-                                    .unwrap_or("unknown")
-                                    .to_string();
+                            if explicit_slot.is_some() {
                                 tracing::debug!(
-                                    "Found STENTOR_SLOT window: id={}, cwd={}, slot={}",
                                     id,
                                     cwd,
-                                    slot_num
+                                    slot = explicit_slot,
+                                    "Found window with explicit STENTOR_SLOT"
                                 );
-                                stentor_windows
-                                    .push((slot_num, ClaudeWindow { id, cwd, slot_num }));
+                            } else {
+                                tracing::debug!(
+                                    id,
+                                    cwd,
+                                    "Found window matching foreground process"
+                                );
                             }
+
+                            candidates.push((id, cwd, explicit_slot));
                         }
                     }
                 }
@@ -260,14 +297,45 @@ pub fn find_stentor_windows(data: &Value) -> Vec<ClaudeWindow> {
         }
     }
 
-    tracing::debug!("Total STENTOR windows found: {}", stentor_windows.len());
+    // Sort by window ID for stable ordering
+    candidates.sort_by_key(|(id, _, _)| *id);
 
-    // Return ClaudeWindow structs in discovery order (not sorted)
-    // This ensures Alt+1, Alt+2, Alt+3, etc. map to the 1st, 2nd, 3rd discovered windows
-    stentor_windows
-        .into_iter()
-        .map(|(_, window)| window)
-        .collect()
+    // Collect slots that are explicitly claimed
+    let mut occupied_slots: std::collections::HashSet<usize> = candidates
+        .iter()
+        .filter_map(|(_, _, slot)| *slot)
+        .filter(|s| (1..=8).contains(s))
+        .collect();
+
+    // Assign slot numbers
+    let mut result = Vec::new();
+    let mut next_auto_slot = 1usize;
+
+    for (id, cwd, explicit_slot) in candidates {
+        let slot_num = if let Some(slot) = explicit_slot {
+            // Use explicit slot (even if outside 1-8 range for backwards compat)
+            slot
+        } else {
+            // Auto-assign: find next available slot
+            while occupied_slots.contains(&next_auto_slot) && next_auto_slot <= 8 {
+                next_auto_slot += 1;
+            }
+            if next_auto_slot > 8 {
+                tracing::warn!(id, "Skipping window - all 8 slots occupied");
+                continue;
+            }
+            let slot = next_auto_slot;
+            occupied_slots.insert(slot);
+            next_auto_slot += 1;
+            slot
+        };
+
+        tracing::debug!(id, cwd, slot_num, "Assigned slot to window");
+        result.push(ClaudeWindow { id, cwd, slot_num });
+    }
+
+    tracing::debug!(count = result.len(), "Total stentor windows found");
+    result
 }
 
 /// Find the next available STENTOR_SLOT (1-8)
@@ -567,11 +635,16 @@ fn parse_worktree_label(cwd: &str) -> String {
 /// Kitty terminal multi-slot handler implementation
 pub struct KittyMultiSlotHandler {
     config: KittyConfig,
+    /// Mapping of slot number to kitty window ID
+    slot_window_ids: std::sync::Arc<parking_lot::Mutex<HashMap<usize, u64>>>,
 }
 
 impl KittyMultiSlotHandler {
     pub fn new(config: KittyConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            slot_window_ids: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        }
     }
 
     fn get_background_color(&self) -> String {
@@ -625,16 +698,18 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         let _ = ui_tx.send_blocking(HandlerUIMessage::SetDestinations(inactive_destinations));
         tracing::info!("Initialized 8 inactive destination slots");
 
-        // Clone ui_tx for thread
+        // Clone config values for thread
         let ui_tx_for_kitty = ui_tx.clone();
         let base_bg = self.config.base_background_color.clone();
+        let slot_matchers = parse_slot_matchers(&self.config.slot_matches);
+        let slot_window_ids = std::sync::Arc::clone(&self.slot_window_ids);
 
         thread::spawn(move || {
             tracing::info!("Background: Starting Kitty window discovery");
 
             match list_kitty_windows() {
                 Ok(data) => {
-                    let stentor_windows = find_stentor_windows(&data);
+                    let stentor_windows = find_stentor_windows(&data, &slot_matchers);
                     tracing::info!(
                         "Background: Found {} STENTOR windows",
                         stentor_windows.len()
@@ -667,6 +742,8 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                                     window.id
                                 );
                                 modified_window_ids.push(window.id);
+                                // Store slot -> window_id mapping for output command
+                                slot_window_ids.lock().insert(slot_num, window.id);
                             }
 
                             // Create destination slot with label and send immediately
@@ -743,11 +820,18 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         Ok(())
     }
 
-    fn output_env_vars(&self) -> Vec<(String, String)> {
-        match get_kitty_listen_on() {
-            Ok(socket_path) => vec![("KITTY_LISTEN_ON".to_string(), socket_path)],
-            Err(_) => Vec::new(),
+    fn output_env_vars(&self, slot_num: usize) -> Vec<(String, String)> {
+        let mut vars = Vec::new();
+
+        if let Ok(socket_path) = get_kitty_listen_on() {
+            vars.push(("KITTY_LISTEN_ON".to_string(), socket_path));
         }
+
+        if let Some(&window_id) = self.slot_window_ids.lock().get(&slot_num) {
+            vars.push(("WINDOW_ID".to_string(), window_id.to_string()));
+        }
+
+        vars
     }
 }
 
@@ -873,7 +957,7 @@ mod tests {
     #[test]
     fn test_find_stentor_windows_empty() {
         let data = json!([]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 0);
     }
 
@@ -890,7 +974,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 0);
     }
 
@@ -909,7 +993,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, 1);
         assert_eq!(windows[0].slot_num, 1);
@@ -930,7 +1014,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].id, 1);
         assert_eq!(windows[0].slot_num, 3);
@@ -965,7 +1049,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].id, 1);
         assert_eq!(windows[0].slot_num, 1);
@@ -989,7 +1073,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 0);
     }
 
@@ -1030,8 +1114,8 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
-        // All numeric slots are accepted
+        let windows = find_stentor_windows(&data, &[]);
+        // All numeric slots are accepted (sorted by window ID)
         assert_eq!(windows.len(), 3);
         assert_eq!(windows[0].slot_num, 0);
         assert_eq!(windows[1].slot_num, 9);
@@ -1059,7 +1143,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 0);
     }
 
@@ -1077,7 +1161,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].cwd, "/home/user/project");
     }
@@ -1096,7 +1180,7 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 1);
         assert_eq!(windows[0].cwd, "unknown");
     }
@@ -1124,7 +1208,7 @@ mod tests {
                 ]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 2);
         assert_eq!(windows[0].id, 1);
         assert_eq!(windows[1].id, 2);
@@ -1153,7 +1237,272 @@ mod tests {
                 }]
             }
         ]);
-        let windows = find_stentor_windows(&data);
+        let windows = find_stentor_windows(&data, &[]);
         assert_eq!(windows.len(), 2);
+    }
+
+    // Tests for foreground process matching
+    #[test]
+    fn test_find_windows_by_foreground_process() {
+        let matchers = parse_slot_matchers(&["claude".to_string(), "nvim".to_string()]);
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {},
+                        "foreground_processes": [{
+                            "cmdline": ["claude"],
+                            "cwd": "/home/test",
+                            "pid": 12345
+                        }]
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &matchers);
+        assert_eq!(windows.len(), 1);
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 1); // Auto-assigned
+    }
+
+    #[test]
+    fn test_find_windows_by_foreground_process_with_path() {
+        // Command with full path should match by basename
+        let matchers = parse_slot_matchers(&["nvim".to_string()]);
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {},
+                        "foreground_processes": [{
+                            "cmdline": ["/usr/bin/nvim", "file.rs"],
+                            "cwd": "/home/test",
+                            "pid": 12345
+                        }]
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &matchers);
+        assert_eq!(windows.len(), 1);
+    }
+
+    #[test]
+    fn test_find_windows_no_match_without_slot_matchers() {
+        // Without slot matchers, only STENTOR_SLOT env var matches
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [{
+                        "id": 1,
+                        "cwd": "/home/test",
+                        "env": {},
+                        "foreground_processes": [{
+                            "cmdline": ["claude"],
+                            "cwd": "/home/test",
+                            "pid": 12345
+                        }]
+                    }]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &[]);
+        assert_eq!(windows.len(), 0);
+    }
+
+    #[test]
+    fn test_find_windows_mixed_explicit_and_auto() {
+        // Mix of explicit STENTOR_SLOT and foreground process matching
+        let matchers = parse_slot_matchers(&["claude".to_string()]);
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 1,
+                            "cwd": "/explicit",
+                            "env": {"STENTOR_SLOT": "3"},
+                            "foreground_processes": []
+                        },
+                        {
+                            "id": 2,
+                            "cwd": "/auto",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/auto",
+                                "pid": 12345
+                            }]
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &matchers);
+        assert_eq!(windows.len(), 2);
+        // Sorted by window ID
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 3); // Explicit
+        assert_eq!(windows[1].id, 2);
+        assert_eq!(windows[1].slot_num, 1); // Auto-assigned (skips 3)
+    }
+
+    #[test]
+    fn test_find_windows_auto_assign_skips_explicit_slots() {
+        // Auto-assign should skip slots claimed by explicit STENTOR_SLOT
+        let matchers = parse_slot_matchers(&["claude".to_string()]);
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 1,
+                            "cwd": "/auto1",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/auto1",
+                                "pid": 1
+                            }]
+                        },
+                        {
+                            "id": 2,
+                            "cwd": "/explicit",
+                            "env": {"STENTOR_SLOT": "1"},
+                            "foreground_processes": []
+                        },
+                        {
+                            "id": 3,
+                            "cwd": "/auto2",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/auto2",
+                                "pid": 3
+                            }]
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &matchers);
+        assert_eq!(windows.len(), 3);
+        // Window 1 (auto) gets slot 2 because slot 1 is claimed by window 2
+        assert_eq!(windows[0].id, 1);
+        assert_eq!(windows[0].slot_num, 2);
+        // Window 2 (explicit) keeps slot 1
+        assert_eq!(windows[1].id, 2);
+        assert_eq!(windows[1].slot_num, 1);
+        // Window 3 (auto) gets slot 3
+        assert_eq!(windows[2].id, 3);
+        assert_eq!(windows[2].slot_num, 3);
+    }
+
+    #[test]
+    fn test_find_windows_sorted_by_window_id() {
+        // Windows should be sorted by ID regardless of discovery order
+        let matchers = parse_slot_matchers(&["claude".to_string()]);
+        let data = json!([
+            {
+                "tabs": [{
+                    "windows": [
+                        {
+                            "id": 50,
+                            "cwd": "/c",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/c",
+                                "pid": 1
+                            }]
+                        },
+                        {
+                            "id": 10,
+                            "cwd": "/a",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/a",
+                                "pid": 2
+                            }]
+                        },
+                        {
+                            "id": 30,
+                            "cwd": "/b",
+                            "env": {},
+                            "foreground_processes": [{
+                                "cmdline": ["claude"],
+                                "cwd": "/b",
+                                "pid": 3
+                            }]
+                        }
+                    ]
+                }]
+            }
+        ]);
+        let windows = find_stentor_windows(&data, &matchers);
+        assert_eq!(windows.len(), 3);
+        // Sorted by window ID
+        assert_eq!(windows[0].id, 10);
+        assert_eq!(windows[0].slot_num, 1);
+        assert_eq!(windows[1].id, 30);
+        assert_eq!(windows[1].slot_num, 2);
+        assert_eq!(windows[2].id, 50);
+        assert_eq!(windows[2].slot_num, 3);
+    }
+
+    #[test]
+    fn test_matches_foreground_process_empty_matchers() {
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["claude"],
+                "cwd": "/test",
+                "pid": 123
+            }]
+        });
+        assert!(!matches_foreground_process(&window, &[]));
+    }
+
+    #[test]
+    fn test_matches_foreground_process_match() {
+        let matchers = parse_slot_matchers(&["claude".to_string()]);
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["claude"],
+                "cwd": "/test",
+                "pid": 123
+            }]
+        });
+        assert!(matches_foreground_process(&window, &matchers));
+    }
+
+    #[test]
+    fn test_matches_foreground_process_no_match() {
+        let matchers = parse_slot_matchers(&["nvim".to_string()]);
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["claude"],
+                "cwd": "/test",
+                "pid": 123
+            }]
+        });
+        assert!(!matches_foreground_process(&window, &matchers));
+    }
+
+    #[test]
+    fn test_slot_matcher_cmd_prefix() {
+        let matchers = parse_slot_matchers(&["cmd:claude".to_string()]);
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["claude"],
+                "cwd": "/test",
+                "pid": 123
+            }]
+        });
+        assert!(matches_foreground_process(&window, &matchers));
     }
 }

@@ -229,7 +229,7 @@ pub async fn run(
                                         let cmd_str = output_command_for_auto_send.clone();
                                         let extra_env_vars = handler_for_close
                                             .as_ref()
-                                            .map(|h| h.output_env_vars())
+                                            .map(|h| h.output_env_vars(dest_num))
                                             .unwrap_or_default();
                                         tracing::info!("Output command configured: {:?}", cmd_str);
                                         std::thread::spawn(move || {
@@ -337,7 +337,7 @@ pub async fn run(
                                 let cmd_str = output_command_for_send.clone();
                                 let extra_env_vars = handler_for_send
                                     .as_ref()
-                                    .map(|h| h.output_env_vars())
+                                    .map(|h| h.output_env_vars(dest_num))
                                     .unwrap_or_default();
                                 let handler = handler_for_send.clone();
                                 let ui_tx_close = ui_tx_for_close.clone();

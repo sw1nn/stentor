@@ -1,7 +1,79 @@
 use anyhow::{Context, Result};
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use xdg::BaseDirectories;
+
+/// Represents a pattern for matching windows to slots.
+/// Parsed from config strings with prefix notation.
+#[derive(Debug, Clone)]
+pub enum SlotMatcher {
+    /// Match against foreground process command name (basename)
+    /// Format: "cmd:name" or just "name" (for backward compatibility)
+    Cmd(String),
+    /// Match against Hyprland window title using regex
+    /// Format: "hypr-title:regex"
+    HyprTitle(Regex),
+    /// Match against Hyprland window class using regex
+    /// Format: "hypr-class:regex"
+    HyprClass(Regex),
+}
+
+impl SlotMatcher {
+    /// Parse a slot match pattern from a config string.
+    pub fn parse(s: &str) -> Result<Self> {
+        if let Some(pattern) = s.strip_prefix("cmd:") {
+            Ok(SlotMatcher::Cmd(pattern.to_string()))
+        } else if let Some(pattern) = s.strip_prefix("hypr-title:") {
+            let regex = Regex::new(pattern)
+                .with_context(|| format!("Invalid regex in hypr-title pattern: {pattern}"))?;
+            Ok(SlotMatcher::HyprTitle(regex))
+        } else if let Some(pattern) = s.strip_prefix("hypr-class:") {
+            let regex = Regex::new(pattern)
+                .with_context(|| format!("Invalid regex in hypr-class pattern: {pattern}"))?;
+            Ok(SlotMatcher::HyprClass(regex))
+        } else {
+            // Backward compatibility: treat bare strings as cmd matches
+            Ok(SlotMatcher::Cmd(s.to_string()))
+        }
+    }
+
+    /// Check if this matcher matches a given command name (for Kitty foreground process).
+    pub fn matches_cmd(&self, cmd_name: &str) -> bool {
+        match self {
+            SlotMatcher::Cmd(pattern) => cmd_name == pattern,
+            _ => false,
+        }
+    }
+
+    /// Check if this is a Hyprland matcher (title or class).
+    pub fn is_hyprland_matcher(&self) -> bool {
+        matches!(self, SlotMatcher::HyprTitle(_) | SlotMatcher::HyprClass(_))
+    }
+
+    /// Check if this matcher matches a Hyprland window.
+    pub fn matches_hyprland_window(&self, title: &str, class: &str) -> bool {
+        match self {
+            SlotMatcher::HyprTitle(regex) => regex.is_match(title),
+            SlotMatcher::HyprClass(regex) => regex.is_match(class),
+            SlotMatcher::Cmd(_) => false,
+        }
+    }
+}
+
+/// Parse a list of slot match patterns from config strings.
+pub fn parse_slot_matchers(patterns: &[String]) -> Vec<SlotMatcher> {
+    patterns
+        .iter()
+        .filter_map(|s| match SlotMatcher::parse(s) {
+            Ok(matcher) => Some(matcher),
+            Err(e) => {
+                tracing::warn!(pattern = s, error = %e, "Failed to parse slot matcher");
+                None
+            }
+        })
+        .collect()
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ConfigFile {
@@ -26,6 +98,14 @@ pub struct KittyConfig {
 
     #[serde(default, alias = "output-command")]
     pub output_command: Option<String>,
+
+    /// List of patterns to match windows for auto-assignment to slots.
+    /// Supports prefix notation:
+    /// - "cmd:name" or "name" - match foreground process command
+    /// - "hypr-title:regex" - match Hyprland window title
+    /// - "hypr-class:regex" - match Hyprland window class
+    #[serde(default, alias = "slot-matches")]
+    pub slot_matches: Vec<String>,
 }
 
 impl Default for KittyConfig {
@@ -34,6 +114,7 @@ impl Default for KittyConfig {
             background_color_cmd: None,
             base_background_color: default_kitty_base_background(),
             output_command: None,
+            slot_matches: Vec::new(),
         }
     }
 }
@@ -405,4 +486,78 @@ mod tests {
         assert_eq!(config_file.client.source, Some("my-microphone".to_string()));
         assert_eq!(config_file.kitty.base_background_color, "#202020");
     }
+
+    #[test]
+    fn test_slot_matcher_parse_cmd_prefix() {
+        let matcher = SlotMatcher::parse("cmd:claude").unwrap();
+        assert!(matches!(matcher, SlotMatcher::Cmd(ref s) if s == "claude"));
+        assert!(matcher.matches_cmd("claude"));
+        assert!(!matcher.matches_cmd("nvim"));
+    }
+
+    #[test]
+    fn test_slot_matcher_parse_bare_string() {
+        let matcher = SlotMatcher::parse("claude").unwrap();
+        assert!(matches!(matcher, SlotMatcher::Cmd(ref s) if s == "claude"));
+        assert!(matcher.matches_cmd("claude"));
+    }
+
+    #[test]
+    fn test_slot_matcher_parse_hypr_title() {
+        let matcher = SlotMatcher::parse("hypr-title:MultiMessage:.*").unwrap();
+        assert!(matches!(matcher, SlotMatcher::HyprTitle(_)));
+        assert!(matcher.is_hyprland_matcher());
+        assert!(matcher.matches_hyprland_window("MultiMessage: test", "kitty"));
+        assert!(!matcher.matches_hyprland_window("Other title", "kitty"));
+    }
+
+    #[test]
+    fn test_slot_matcher_parse_hypr_class() {
+        let matcher = SlotMatcher::parse("hypr-class:^kitty$").unwrap();
+        assert!(matches!(matcher, SlotMatcher::HyprClass(_)));
+        assert!(matcher.is_hyprland_matcher());
+        assert!(matcher.matches_hyprland_window("any title", "kitty"));
+        assert!(!matcher.matches_hyprland_window("any title", "alacritty"));
+    }
+
+    #[test]
+    fn test_slot_matcher_invalid_regex() {
+        let result = SlotMatcher::parse("hypr-title:[invalid");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_slot_matchers_mixed() {
+        let patterns = vec![
+            "claude".to_string(),
+            "cmd:nvim".to_string(),
+            "hypr-title:Test.*".to_string(),
+        ];
+        let matchers = parse_slot_matchers(&patterns);
+        assert_eq!(matchers.len(), 3);
+    }
+
+    #[test]
+    fn test_parse_slot_matchers_skips_invalid() {
+        let patterns = vec![
+            "claude".to_string(),
+            "hypr-title:[invalid".to_string(),
+            "nvim".to_string(),
+        ];
+        let matchers = parse_slot_matchers(&patterns);
+        assert_eq!(matchers.len(), 2);
+    }
+
+    #[test]
+    fn test_kitty_config_slot_matches() {
+        let toml_str = r##"
+            slot-matches = ["cmd:claude", "hypr-title:Test.*"]
+        "##;
+
+        let kitty_config: KittyConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(kitty_config.slot_matches.len(), 2);
+        assert_eq!(kitty_config.slot_matches[0], "cmd:claude");
+        assert_eq!(kitty_config.slot_matches[1], "hypr-title:Test.*");
+    }
+
 }

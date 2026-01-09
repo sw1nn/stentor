@@ -1983,6 +1983,7 @@ dependencies = [
  "libpulse-binding",
  "libpulse-simple-binding",
  "parking_lot",
+ "regex",
  "reqwest",
  "scopeguard",
  "serde",

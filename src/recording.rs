@@ -722,12 +722,11 @@ pub fn execute_output_command(
         "Executing command"
     );
 
-    // Pass transcription and slot number via environment variables to prevent shell injection
+    // Pass transcription via environment variable to prevent shell injection
     let mut cmd = std::process::Command::new("sh");
     cmd.arg("-c")
         .arg(command_template)
-        .env("TRANSCRIPTION", text)
-        .env("SLOT", slot_num.to_string());
+        .env("TRANSCRIPTION", text);
 
     // Add handler-specific environment variables
     for (key, value) in extra_env_vars {

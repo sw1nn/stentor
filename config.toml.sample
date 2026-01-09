@@ -63,3 +63,24 @@ language = "en"
 # Unix socket filename (created in $XDG_RUNTIME_DIR)
 # Default: stentor.sock
 #socket-name = "stentor.sock"
+
+[kitty]
+# Patterns for matching windows to auto-assign to slots
+# Supports prefix notation for different match types:
+#
+# cmd:<name> - Match foreground process command (basename)
+#              e.g., "cmd:claude" matches windows running claude
+#              Note: bare strings without prefix also work (same as cmd:)
+#
+# Examples:
+#slot-matches = ["cmd:claude", "cmd:nvim"]
+#slot-matches = ["claude", "nvim"]
+
+# Command to send transcribed text to the matched kitty window
+# Available environment variables:
+#   $TRANSCRIPTION - the transcribed text
+#   $WINDOW_ID - the kitty window ID for the slot
+#   $KITTY_LISTEN_ON - the kitty socket path
+#
+# Example:
+#output-command = "kitty @ send-text --match id:$WINDOW_ID -- \"$TRANSCRIPTION\""
