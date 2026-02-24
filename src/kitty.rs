@@ -219,6 +219,8 @@ pub fn list_kitty_windows() -> Result<Value> {
 }
 
 /// Check if any foreground process command matches the configured slot matchers (cmd: type).
+/// Checks the basename of all cmdline elements, not just the binary, so that
+/// interpreter-wrapped commands (e.g. `node /usr/bin/gemini`) are matched correctly.
 fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> bool {
     if matchers.is_empty() {
         return false;
@@ -229,14 +231,15 @@ fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> bool 
         .and_then(|p| p.as_array())
     {
         for process in fg_processes {
-            if let Some(cmdline) = process.get("cmdline").and_then(|c| c.as_array())
-                && let Some(cmd) = cmdline.first().and_then(|c| c.as_str())
-            {
-                // Extract just the command name (basename) for comparison
-                let cmd_name = cmd.rsplit('/').next().unwrap_or(cmd);
-                if matchers.iter().any(|m| m.matches_cmd(cmd_name)) {
-                    tracing::trace!(cmd_name, "Foreground process matches slot matcher");
-                    return true;
+            if let Some(cmdline) = process.get("cmdline").and_then(|c| c.as_array()) {
+                for arg in cmdline {
+                    if let Some(arg_str) = arg.as_str() {
+                        let basename = arg_str.rsplit('/').next().unwrap_or(arg_str);
+                        if matchers.iter().any(|m| m.matches_cmd(basename)) {
+                            tracing::trace!(basename, "Foreground process matches slot matcher");
+                            return true;
+                        }
+                    }
                 }
             }
         }
@@ -1668,6 +1671,33 @@ mod tests {
                 "cmdline": ["claude"],
                 "cwd": "/test",
                 "pid": 123
+            }]
+        });
+        assert!(matches_foreground_process(&window, &matchers));
+    }
+
+    #[test]
+    fn test_matches_foreground_process_interpreter_wrapped() {
+        // Node.js-based CLI tools like gemini run as `node /usr/bin/gemini`
+        let matchers = parse_slot_matchers(&["cmd:gemini".to_string()]);
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["node", "/usr/bin/gemini"],
+                "cwd": "/test",
+                "pid": 123
+            }]
+        });
+        assert!(matches_foreground_process(&window, &matchers));
+    }
+
+    #[test]
+    fn test_matches_foreground_process_interpreter_wrapped_full_path() {
+        let matchers = parse_slot_matchers(&["gemini".to_string()]);
+        let window = json!({
+            "foreground_processes": [{
+                "cmdline": ["/usr/bin/node", "/usr/bin/gemini"],
+                "cwd": "/test",
+                "pid": 456
             }]
         });
         assert!(matches_foreground_process(&window, &matchers));
