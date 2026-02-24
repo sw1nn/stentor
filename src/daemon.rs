@@ -8,15 +8,11 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 #[value(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum MultiSlotHandler {
+    #[default]
     None,
     Kitty,
-}
-
-impl Default for MultiSlotHandler {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
