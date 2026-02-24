@@ -52,6 +52,7 @@ pub struct ClaudeWindow {
     pub id: u64,
     pub cwd: String,
     pub slot_num: usize,
+    pub matched_cmd: String,
 }
 
 fn get_kitty_socket_name() -> Result<String> {
@@ -221,9 +222,10 @@ pub fn list_kitty_windows() -> Result<Value> {
 /// Check if any foreground process command matches the configured slot matchers (cmd: type).
 /// Checks the basename of all cmdline elements, not just the binary, so that
 /// interpreter-wrapped commands (e.g. `node /usr/bin/gemini`) are matched correctly.
-fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> bool {
+/// Returns the matched command name if found.
+fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> Option<String> {
     if matchers.is_empty() {
-        return false;
+        return None;
     }
 
     if let Some(fg_processes) = window
@@ -237,20 +239,20 @@ fn matches_foreground_process(window: &Value, matchers: &[SlotMatcher]) -> bool 
                         let basename = arg_str.rsplit('/').next().unwrap_or(arg_str);
                         if matchers.iter().any(|m| m.matches_cmd(basename)) {
                             tracing::trace!(basename, "Foreground process matches slot matcher");
-                            return true;
+                            return Some(basename.to_string());
                         }
                     }
                 }
             }
         }
     }
-    false
+    None
 }
 
 pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<ClaudeWindow> {
-    // Collect candidate windows: (id, cwd, explicit_slot)
+    // Collect candidate windows: (id, cwd, explicit_slot, matched_cmd)
     // explicit_slot is Some if STENTOR_SLOT env var is set, None for auto-assign
-    let mut candidates: Vec<(u64, String, Option<usize>)> = Vec::new();
+    let mut candidates: Vec<(u64, String, Option<usize>, String)> = Vec::new();
 
     if let Some(os_windows) = data.as_array() {
         tracing::debug!("Scanning {} OS window(s)", os_windows.len());
@@ -274,10 +276,9 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
                                 };
 
                             // Include window if it has explicit slot OR matches any slot matcher
-                            let should_include = explicit_slot.is_some()
-                                || matches_foreground_process(window, matchers);
+                            let matched_cmd = matches_foreground_process(window, matchers);
 
-                            if !should_include {
+                            if explicit_slot.is_none() && matched_cmd.is_none() {
                                 continue;
                             }
 
@@ -287,22 +288,26 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
                                 .unwrap_or("unknown")
                                 .to_string();
 
+                            let cmd = matched_cmd.unwrap_or_default();
+
                             if explicit_slot.is_some() {
                                 tracing::debug!(
                                     id,
                                     cwd,
                                     slot = explicit_slot,
+                                    cmd,
                                     "Found window with explicit STENTOR_SLOT"
                                 );
                             } else {
                                 tracing::debug!(
                                     id,
                                     cwd,
+                                    cmd,
                                     "Found window matching foreground process"
                                 );
                             }
 
-                            candidates.push((id, cwd, explicit_slot));
+                            candidates.push((id, cwd, explicit_slot, cmd));
                         }
                     }
                 }
@@ -311,12 +316,12 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
     }
 
     // Sort by window ID for stable ordering
-    candidates.sort_by_key(|(id, _, _)| *id);
+    candidates.sort_by_key(|(id, _, _, _)| *id);
 
     // Collect slots that are explicitly claimed
     let mut occupied_slots: std::collections::HashSet<usize> = candidates
         .iter()
-        .filter_map(|(_, _, slot)| *slot)
+        .filter_map(|(_, _, slot, _)| *slot)
         .filter(|s| (1..=8).contains(s))
         .collect();
 
@@ -324,7 +329,7 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
     let mut result = Vec::new();
     let mut next_auto_slot = 1usize;
 
-    for (id, cwd, explicit_slot) in candidates {
+    for (id, cwd, explicit_slot, matched_cmd) in candidates {
         let slot_num = if let Some(slot) = explicit_slot {
             // Use explicit slot (even if outside 1-8 range for backwards compat)
             slot
@@ -343,8 +348,13 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
             slot
         };
 
-        tracing::debug!(id, cwd, slot_num, "Assigned slot to window");
-        result.push(ClaudeWindow { id, cwd, slot_num });
+        tracing::debug!(id, cwd, slot_num, matched_cmd, "Assigned slot to window");
+        result.push(ClaudeWindow {
+            id,
+            cwd,
+            slot_num,
+            matched_cmd,
+        });
     }
 
     tracing::debug!(count = result.len(), "Total stentor windows found");
@@ -880,7 +890,12 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                                 }
                             };
 
-                            let label = parse_worktree_label(&window.cwd);
+                            let worktree_label = parse_worktree_label(&window.cwd);
+                            let label = if window.matched_cmd.is_empty() {
+                                worktree_label
+                            } else {
+                                format!("{worktree_label}\n{}", window.matched_cmd)
+                            };
 
                             setups.push(WindowSetup {
                                 window_id: window.id,
@@ -1634,12 +1649,12 @@ mod tests {
                 "pid": 123
             }]
         });
-        assert!(!matches_foreground_process(&window, &[]));
+        assert!(matches_foreground_process(&window, &[]).is_none());
     }
 
     #[test]
     fn test_matches_foreground_process_match() {
-        let matchers = parse_slot_matchers(&["claude".to_string()]);
+        let matchers = parse_slot_matchers(&["claude".to_owned()]);
         let window = json!({
             "foreground_processes": [{
                 "cmdline": ["claude"],
@@ -1647,12 +1662,15 @@ mod tests {
                 "pid": 123
             }]
         });
-        assert!(matches_foreground_process(&window, &matchers));
+        assert_eq!(
+            matches_foreground_process(&window, &matchers).as_deref(),
+            Some("claude")
+        );
     }
 
     #[test]
     fn test_matches_foreground_process_no_match() {
-        let matchers = parse_slot_matchers(&["nvim".to_string()]);
+        let matchers = parse_slot_matchers(&["nvim".to_owned()]);
         let window = json!({
             "foreground_processes": [{
                 "cmdline": ["claude"],
@@ -1660,12 +1678,12 @@ mod tests {
                 "pid": 123
             }]
         });
-        assert!(!matches_foreground_process(&window, &matchers));
+        assert!(matches_foreground_process(&window, &matchers).is_none());
     }
 
     #[test]
     fn test_slot_matcher_cmd_prefix() {
-        let matchers = parse_slot_matchers(&["cmd:claude".to_string()]);
+        let matchers = parse_slot_matchers(&["cmd:claude".to_owned()]);
         let window = json!({
             "foreground_processes": [{
                 "cmdline": ["claude"],
@@ -1673,13 +1691,16 @@ mod tests {
                 "pid": 123
             }]
         });
-        assert!(matches_foreground_process(&window, &matchers));
+        assert_eq!(
+            matches_foreground_process(&window, &matchers).as_deref(),
+            Some("claude")
+        );
     }
 
     #[test]
     fn test_matches_foreground_process_interpreter_wrapped() {
         // Node.js-based CLI tools like gemini run as `node /usr/bin/gemini`
-        let matchers = parse_slot_matchers(&["cmd:gemini".to_string()]);
+        let matchers = parse_slot_matchers(&["cmd:gemini".to_owned()]);
         let window = json!({
             "foreground_processes": [{
                 "cmdline": ["node", "/usr/bin/gemini"],
@@ -1687,12 +1708,15 @@ mod tests {
                 "pid": 123
             }]
         });
-        assert!(matches_foreground_process(&window, &matchers));
+        assert_eq!(
+            matches_foreground_process(&window, &matchers).as_deref(),
+            Some("gemini")
+        );
     }
 
     #[test]
     fn test_matches_foreground_process_interpreter_wrapped_full_path() {
-        let matchers = parse_slot_matchers(&["gemini".to_string()]);
+        let matchers = parse_slot_matchers(&["gemini".to_owned()]);
         let window = json!({
             "foreground_processes": [{
                 "cmdline": ["/usr/bin/node", "/usr/bin/gemini"],
@@ -1700,7 +1724,10 @@ mod tests {
                 "pid": 456
             }]
         });
-        assert!(matches_foreground_process(&window, &matchers));
+        assert_eq!(
+            matches_foreground_process(&window, &matchers).as_deref(),
+            Some("gemini")
+        );
     }
 }
 

@@ -23,5 +23,5 @@ post_bump_hooks = [
   "git push",
   "git push origin v{{version}}",
   "sudo sw1nn-makepkg-chroot -C packaging/arch",
-  "sw1nn-pkg-upload packaging/arch/*-{{version}}-*.pkg.tar.zst",
+  "sw1nn-pkg-ctl upload packaging/arch/*-{{version}}-*.pkg.tar.zst",
 ]

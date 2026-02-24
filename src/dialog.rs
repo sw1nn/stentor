@@ -329,6 +329,7 @@ impl TranscriptionDialog {
                 hbox.append(&icon_label);
 
                 // Parse label for multi-line support
+                // Format: "repo_name\nbranch\nmatched_cmd"
                 let lines: Vec<&str> = slot.label.split('\n').collect();
 
                 if lines.len() > 1 {
@@ -338,18 +339,27 @@ impl TranscriptionDialog {
                     // First line (repo name) - regular color
                     let line1 = Label::new(Some(lines[0]));
                     line1.set_markup(&format!("<small>{}</small>", lines[0]));
-                    line1.set_xalign(0.0); // Left align
+                    line1.set_xalign(0.0);
                     vbox.append(&line1);
 
                     // Second line (branch name) - dimmed color
                     if let Some(line2_text) = lines.get(1) {
                         let line2 = Label::new(Some(line2_text));
                         line2.set_markup(&format!(
-                            "<small><span foreground='#888888'>{}</span></small>",
-                            line2_text
+                            "<small><span foreground='#888888'>{line2_text}</span></small>",
                         ));
-                        line2.set_xalign(0.0); // Left align
+                        line2.set_xalign(0.0);
                         vbox.append(&line2);
+                    }
+
+                    // Third line (matched command) - dimmed italic
+                    if let Some(line3_text) = lines.get(2) {
+                        let line3 = Label::new(Some(line3_text));
+                        line3.set_markup(&format!(
+                            "<small><span foreground='#888888' style='italic'>{line3_text}</span></small>",
+                        ));
+                        line3.set_xalign(0.0);
+                        vbox.append(&line3);
                     }
 
                     hbox.append(&vbox);
@@ -357,7 +367,7 @@ impl TranscriptionDialog {
                     // Single line label
                     let text_label = Label::new(Some(&slot.label));
                     text_label.set_markup(&format!("<small>{}</small>", &slot.label));
-                    text_label.set_xalign(0.0); // Left align
+                    text_label.set_xalign(0.0);
                     text_label.set_valign(gtk4::Align::Center);
                     hbox.append(&text_label);
                 }
