@@ -325,7 +325,7 @@ impl TranscriptionDialog {
                     "<span size='large'>{}</span>",
                     slot_unicode_char(slot_num)
                 ));
-                icon_label.set_valign(gtk4::Align::Center);
+                icon_label.set_valign(gtk4::Align::Start);
                 hbox.append(&icon_label);
 
                 // Parse label for multi-line support
@@ -342,21 +342,21 @@ impl TranscriptionDialog {
                     line1.set_xalign(0.0);
                     vbox.append(&line1);
 
-                    // Second line (branch name) - dimmed color
+                    // Second line (branch name) - yellow
                     if let Some(line2_text) = lines.get(1) {
                         let line2 = Label::new(Some(line2_text));
                         line2.set_markup(&format!(
-                            "<small><span foreground='#888888'>{line2_text}</span></small>",
+                            "<small><span foreground='#d4a017'>{line2_text}</span></small>",
                         ));
                         line2.set_xalign(0.0);
                         vbox.append(&line2);
                     }
 
-                    // Third line (matched command) - dimmed italic
+                    // Third line (matched command) - cyan italic
                     if let Some(line3_text) = lines.get(2) {
                         let line3 = Label::new(Some(line3_text));
                         line3.set_markup(&format!(
-                            "<small><span foreground='#888888' style='italic'>{line3_text}</span></small>",
+                            "<small><span foreground='#00bcd4' style='italic'>{line3_text}</span></small>",
                         ));
                         line3.set_xalign(0.0);
                         vbox.append(&line3);
