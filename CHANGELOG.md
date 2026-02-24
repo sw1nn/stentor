@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.29.2 - 2026-02-24
+#### Bug Fixes
+- (**kitty**) match interpreter-wrapped commands in foreground process detection - (e5fa167) - Neale Swinnerton
+#### Style
+- apply clippy and fmt fixes - (5f3ad1f) - Neale Swinnerton
+
+- - -
+
 ## v0.29.1 - 2026-01-09
 #### Documentation
 - update README with slot-matches window discovery - (fb97a09) - Neale Swinnerton
