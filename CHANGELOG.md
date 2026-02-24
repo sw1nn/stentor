@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.30.0 - 2026-02-24
+#### Features
+- (**kitty**) display matched command name in slot labels - (4f96e7b) - Neale Swinnerton
+#### Style
+- (**dialog**) improve slot label layout and colors - (2a2349a) - Neale Swinnerton
+
+- - -
+
 ## v0.29.2 - 2026-02-24
 #### Bug Fixes
 - (**kitty**) match interpreter-wrapped commands in foreground process detection - (e5fa167) - Neale Swinnerton
