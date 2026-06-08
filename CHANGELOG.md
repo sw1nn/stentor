@@ -2,6 +2,18 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.31.0 - 2026-06-08
+#### Features
+- (**cli**) add shell completions and enable --version - (1d7ccaf) - Neale Swinnerton
+#### Bug Fixes
+- (**packaging**) use git+https:// instead of git+ssh:// in PKGBUILD - (330d2ee) - Neale Swinnerton
+#### Miscellaneous Chores
+- (**deps**) bump versions to latest major.minor - (99301e8) - Neale Swinnerton
+- (**packaging**) remove sudo from makepkg hook - (ebb6434) - Neale Swinnerton
+- add Justfile with release recipe - (eb1c889) - Neale Swinnerton
+
+- - -
+
 ## v0.30.0 - 2026-02-24
 #### Features
 - (**kitty**) display matched command name in slot labels - (4f96e7b) - Neale Swinnerton
