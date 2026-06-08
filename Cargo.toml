@@ -48,6 +48,7 @@ xdg = "3.0"
 
 # CLI
 clap = { version = "4.6", features = ["derive"] }
+clap_complete = "4.6"
 
 # Error handling
 anyhow = "1.0"

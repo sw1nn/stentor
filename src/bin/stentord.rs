@@ -9,6 +9,7 @@ use stentor::transcription::Transcriber;
 
 #[derive(Parser)]
 #[command(name = "stentord")]
+#[command(version)]
 #[command(about = "Real-time transcription daemon", long_about = None)]
 #[command(
     after_help = "Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.\nCommand-line arguments override config file settings."

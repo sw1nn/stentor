@@ -40,10 +40,13 @@ enum ClientCommand {
     Quit,
     /// List available audio input sources
     ListSources,
+    /// Generate shell completions
+    Completions { shell: clap_complete::Shell },
 }
 
 #[derive(Parser)]
 #[command(name = "stentorctl")]
+#[command(version)]
 #[command(about = "Control transcription daemon", long_about = None)]
 #[command(after_help = "Examples:
   # Start recording
@@ -110,6 +113,18 @@ async fn main() -> Result<()> {
         return launch_command(command);
     }
 
+    // Handle completions generation locally (doesn't need daemon)
+    if let ClientCommand::Completions { shell } = client_command {
+        use clap::CommandFactory;
+        clap_complete::generate(
+            shell,
+            &mut Cli::command(),
+            "stentorctl",
+            &mut std::io::stdout(),
+        );
+        return Ok(());
+    }
+
     // Load configs to get socket path and client settings
     let config = Config::load().context("Failed to load configuration")?;
     let client_config = ClientConfig::load().context("Failed to load client configuration")?;
@@ -155,6 +170,7 @@ async fn main() -> Result<()> {
         Quit => DaemonCommand::Quit,
         ListSources => unreachable!("ListSources handled above"),
         Launch { .. } => unreachable!("Launch handled above"),
+        Completions { .. } => unreachable!("Completions handled above"),
     };
 
     // Serialize to JSON
