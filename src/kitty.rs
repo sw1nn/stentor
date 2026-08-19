@@ -7,7 +7,7 @@ use std::env;
 use std::io::{Read, Write};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::UnixStream;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::config::{SlotMatcher, parse_slot_matchers};
 use crate::defaults;
@@ -725,6 +725,29 @@ where
     Ok(())
 }
 
+/// Owns the fact that a Kitty window's background was changed, and resets it
+/// on drop. This guarantees the reset happens even if the transcribe dialog
+/// is closed (e.g. via Escape) before the explicit `cleanup()` call is wired
+/// up to this window ID - the window is discovered and colored on a
+/// background thread, racing the dialog close on the UI thread.
+struct WindowColorGuard {
+    window_id: u64,
+    background_color: String,
+    empty_image_path: PathBuf,
+}
+
+impl Drop for WindowColorGuard {
+    fn drop(&mut self) {
+        if let Err(e) = reset_window_appearances(
+            &self.background_color,
+            &[self.window_id],
+            &self.empty_image_path,
+        ) {
+            tracing::warn!(window_id = self.window_id, error = %e, "Failed to reset window appearance on drop");
+        }
+    }
+}
+
 use crate::config::KittyConfig;
 use crate::dialog::DestinationSlot;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler};
@@ -783,6 +806,12 @@ pub struct KittyMultiSlotHandler {
     config: KittyConfig,
     /// Mapping of slot number to kitty window ID
     slot_window_ids: std::sync::Arc<parking_lot::Mutex<HashMap<usize, u64>>>,
+    /// Windows with a modified background, each held by a guard that resets
+    /// it on drop - see [`WindowColorGuard`]. `None` once `cleanup()` has
+    /// run, so a window discovered afterwards (the race described on
+    /// [`WindowColorGuard`]) is reset immediately instead of being left
+    /// colored until the handler itself is dropped.
+    active_windows: std::sync::Arc<parking_lot::Mutex<Option<HashMap<u64, WindowColorGuard>>>>,
 }
 
 impl KittyMultiSlotHandler {
@@ -790,48 +819,62 @@ impl KittyMultiSlotHandler {
         Self {
             config,
             slot_window_ids: std::sync::Arc::new(parking_lot::Mutex::new(HashMap::new())),
+            active_windows: std::sync::Arc::new(parking_lot::Mutex::new(Some(HashMap::new()))),
         }
     }
 
     fn get_background_color(&self) -> String {
-        // If a custom command is configured, try to use it
-        if let Some(cmd) = &self.config.background_color_cmd {
-            tracing::debug!(cmd, "Retrieving background color using command");
+        resolve_background_color(
+            self.config.background_color_cmd.as_deref(),
+            &self.config.base_background_color,
+        )
+    }
+}
 
-            match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
-                Ok(output) => {
-                    if output.status.success() {
-                        let color = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                        if !color.is_empty() {
-                            tracing::debug!(color, "Retrieved background color");
-                            return color;
-                        } else {
-                            tracing::warn!("Command returned empty output, using default");
-                        }
+/// Resolve the background color windows should be reset to: the output of
+/// `background_color_cmd` if configured and it succeeds, else `base_background_color`.
+/// May shell out, so callers on the GTK main thread should run this on a background thread.
+fn resolve_background_color(
+    background_color_cmd: Option<&str>,
+    base_background_color: &str,
+) -> String {
+    // If a custom command is configured, try to use it
+    if let Some(cmd) = background_color_cmd {
+        tracing::debug!(cmd, "Retrieving background color using command");
+
+        match std::process::Command::new("sh").arg("-c").arg(cmd).output() {
+            Ok(output) => {
+                if output.status.success() {
+                    let color = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                    if !color.is_empty() {
+                        tracing::debug!(color, "Retrieved background color");
+                        return color;
                     } else {
-                        tracing::warn!(
-                            "Command failed with status {:?}: {}",
-                            output.status,
-                            String::from_utf8_lossy(&output.stderr)
-                        );
+                        tracing::warn!("Command returned empty output, using default");
                     }
-                }
-                Err(e) => {
+                } else {
                     tracing::warn!(
-                        "Failed to execute background color retrieval command: {}",
-                        e
+                        "Command failed with status {:?}: {}",
+                        output.status,
+                        String::from_utf8_lossy(&output.stderr)
                     );
                 }
             }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to execute background color retrieval command: {}",
+                    e
+                );
+            }
         }
-
-        // Fall back to configured base background color
-        tracing::info!(
-            "Using configured background color: {}",
-            self.config.base_background_color
-        );
-        self.config.base_background_color.clone()
     }
+
+    // Fall back to configured base background color
+    tracing::info!(
+        "Using configured background color: {}",
+        base_background_color
+    );
+    base_background_color.to_string()
 }
 
 impl MultiSlotHandler for KittyMultiSlotHandler {
@@ -850,9 +893,15 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         let slot_matchers = parse_slot_matchers(&self.config.slot_matches);
         let slot_window_ids = std::sync::Arc::clone(&self.slot_window_ids);
         let slot_id_font = self.config.slot_id_font.clone();
+        let active_windows = std::sync::Arc::clone(&self.active_windows);
+        let background_color_cmd = self.config.background_color_cmd.clone();
 
         thread::spawn(move || {
             tracing::info!("Background: Starting Kitty window discovery");
+
+            // May shell out to background_color_cmd - keep off the GTK main thread.
+            let background_color =
+                resolve_background_color(background_color_cmd.as_deref(), &base_bg);
 
             match list_kitty_windows() {
                 Ok(data) => {
@@ -921,11 +970,36 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
                         if let Err(e) = set_window_appearances(&appearances) {
                             tracing::warn!(error = %e, "Failed to set window appearances");
                         } else {
+                            let empty_image_path = slot_images::get_empty_image_path().ok();
                             for setup in &setups {
                                 modified_window_ids.push(setup.window_id);
                                 slot_window_ids
                                     .lock()
                                     .insert(setup.slot_num, setup.window_id);
+
+                                // Register the guard that resets this window, even if
+                                // cleanup() never sees this window_id (see WindowColorGuard).
+                                if let Some(ref empty_image_path) = empty_image_path {
+                                    let guard = WindowColorGuard {
+                                        window_id: setup.window_id,
+                                        background_color: background_color.clone(),
+                                        empty_image_path: empty_image_path.clone(),
+                                    };
+                                    // Locking before checking whether cleanup() already ran
+                                    // makes the check-and-insert atomic with cleanup()'s
+                                    // take() - closing the race described on WindowColorGuard.
+                                    match active_windows.lock().as_mut() {
+                                        Some(map) => {
+                                            map.insert(setup.window_id, guard);
+                                        }
+                                        None => drop(guard), // already cleaned up - reset now
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        window_id = setup.window_id,
+                                        "No empty image path available, window will not be auto-reset"
+                                    );
+                                }
                             }
                         }
                     }
@@ -975,31 +1049,14 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         Ok(())
     }
 
-    fn cleanup(&self, window_ids: Vec<u64>) -> Result<()> {
-        if window_ids.is_empty() {
-            return Ok(());
-        }
-
-        let background_color = self.get_background_color();
-        tracing::info!(
-            window_count = window_ids.len(),
-            color = background_color,
-            "Resetting window appearances"
-        );
-
-        // Get empty image path for clearing backgrounds
-        let empty_image_path = match slot_images::get_empty_image_path() {
-            Ok(path) => path,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to get empty image path");
-                return Ok(());
-            }
-        };
-
-        // Clear images and reset colors in a single batched socket call
-        if let Err(e) = reset_window_appearances(&background_color, &window_ids, &empty_image_path)
-        {
-            tracing::warn!(error = %e, "Failed to reset window appearances");
+    fn cleanup(&self, _window_ids: Vec<u64>) -> Result<()> {
+        // Take the map so any window discovered after this point resets
+        // itself immediately instead of being inserted here (see
+        // WindowColorGuard and the `active_windows` field doc).
+        let windows = self.active_windows.lock().take();
+        if let Some(windows) = windows {
+            tracing::info!(window_count = windows.len(), "Resetting window appearances");
+            drop(windows); // drops each WindowColorGuard, resetting its window
         }
 
         Ok(())
