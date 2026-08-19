@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.0 - 2026-08-19
+#### Features
+- (**kitty**) Rework background color handling. - (b9e2cc0) - Neale Swinnerton
+
+- - -
+
 ## v0.31.0 - 2026-06-08
 #### Features
 - (**cli**) add shell completions and enable --version - (1d7ccaf) - Neale Swinnerton
