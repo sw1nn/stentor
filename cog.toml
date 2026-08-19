@@ -19,9 +19,9 @@ pre_bump_hooks = [
 ]
 
 # Post-bump hooks run after the version commit and tag are created
+# Packaging (sw1nn-makepkg-chroot + sw1nn-pkg-ctl upload) is handled by the
+# `package` recipe, invoked from `release` after the bump completes.
 post_bump_hooks = [
   "git push",
   "git push origin v{{version}}",
-  "sw1nn-makepkg-chroot -C packaging/arch",
-  "sw1nn-pkg-ctl upload packaging/arch/*-{{version}}-*.pkg.tar.zst",
 ]
