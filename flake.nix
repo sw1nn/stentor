@@ -22,6 +22,15 @@
             pkg-config
             clang
 
+            # whisper-rs-sys builds whisper.cpp via cmake, with the vulkan
+            # feature compiling ggml-vulkan's shaders through glslc (shaderc).
+            # openmp needs no extra package: it links against libgomp, which
+            # ships with the gcc from nixpkgs' default stdenv used to compile
+            # whisper.cpp's C/C++ sources.
+            cmake
+            shaderc
+            vulkan-headers
+
             # Rust toolchain from rust-toolchain.toml
             (rustVersion.override { extensions = [ "rust-src" "llvm-tools-preview" ]; })
             rust-analyzer
@@ -37,16 +46,16 @@
 
           buildInputs = with pkgs; [
             # Runtime libraries
-            openssl
-            hidapi
-            libusb1
-            imagemagick
             fontconfig
             libpulseaudio
-            sqlite
 
-            # Hyprland libraries
-            hyprland
+            # GUI (gtk4-sys, libadwaita-sys, and friends)
+            gtk4
+            libadwaita
+
+            # whisper-rs's vulkan feature links libvulkan directly
+            # (cargo:rustc-link-lib=vulkan in whisper-rs-sys and gdk4-sys)
+            vulkan-loader
           ];
 
           LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";

@@ -17,9 +17,9 @@ path = "src/bin/client.rs"
 
 [dependencies]
 # UI
-gtk4 = "0.10"
-libadwaita = "0.8"
-glib = "0.21"
+gtk4 = "0.11"
+libadwaita = "0.9"
+glib = "0.22"
 
 # Audio
 hound = "3.5"
@@ -27,10 +27,10 @@ libpulse-binding = "2.30"
 libpulse-simple-binding = "2.28"
 
 # Transcription
-whisper-rs = { version = "0.15", features = ["vulkan", "openmp"] }
+whisper-rs = { version = "0.16", features = ["vulkan", "openmp"] }
 
 # HTTP client for downloading models
-reqwest = { version = "0.12", features = ["blocking", "stream"] }
+reqwest = { version = "0.13", features = ["blocking", "stream"] }
 indicatif = "0.18"
 
 # Async runtime
@@ -43,7 +43,7 @@ parking_lot = "0.12"
 # Config
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9"
+toml = "1.1"
 xdg = "3.0"
 
 # CLI
@@ -60,10 +60,10 @@ regex = "1.12"
 # Image generation for slot number overlays
 image = { version = "0.25", default-features = false, features = ["png"] }
 ab_glyph = "0.2"
-fontconfig = "0.10"
+fontconfig = "0.11"
 
 # Base64 encoding for kitty image protocol
-base64 = "0.22"
+base64 = "0.23"
 
 # Logging
 tracing = "0.1"
@@ -71,8 +71,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 
 # Signal handling
-signal-hook = "0.3"
-signal-hook-tokio = { version = "0.3", features = ["futures-v0_3"] }
+signal-hook = "0.4"
+signal-hook-tokio = { version = "0.4", features = ["futures-v0_3"] }
 
 [features]
 default = []
