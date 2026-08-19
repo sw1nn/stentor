@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.1 - 2026-08-19
+#### Bug Fixes
+- (**transcription**) pass model path directly instead of via lossy string - (973371a) - Neale Swinnerton
+#### Refactoring
+- (**release**) move packaging into just package recipe - (4cb7763) - Neale Swinnerton
+#### Miscellaneous Chores
+- (**deps**) bump gtk4/whisper-rs stack and sync flake.nix + PKGBUILD - (a24a6b7) - Neale Swinnerton
+- (**git**) update source url - (6561474) - Neale Swinnerton
+- (**lint**) fix clippy findings surfaced now the crate compiles - (ea07319) - Neale Swinnerton
+- (**nix**) add flake.nix handling - (e2e1145) - Neale Swinnerton
+
+- - -
+
 ## v0.32.0 - 2026-08-19
 #### Features
 - (**kitty**) Rework background color handling. - (b9e2cc0) - Neale Swinnerton
