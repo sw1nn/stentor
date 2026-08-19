@@ -822,13 +822,6 @@ impl KittyMultiSlotHandler {
             active_windows: std::sync::Arc::new(parking_lot::Mutex::new(Some(HashMap::new()))),
         }
     }
-
-    fn get_background_color(&self) -> String {
-        resolve_background_color(
-            self.config.background_color_cmd.as_deref(),
-            &self.config.base_background_color,
-        )
-    }
 }
 
 /// Resolve the background color windows should be reset to: the output of

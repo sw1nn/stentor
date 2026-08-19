@@ -366,7 +366,7 @@ impl TranscriptionDialog {
                 } else {
                     // Single line label
                     let text_label = Label::new(Some(&slot.label));
-                    text_label.set_markup(&format!("<small>{}</small>", &slot.label));
+                    text_label.set_markup(&format!("<small>{}</small>", slot.label));
                     text_label.set_xalign(0.0);
                     text_label.set_valign(gtk4::Align::Center);
                     hbox.append(&text_label);

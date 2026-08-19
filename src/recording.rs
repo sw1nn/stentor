@@ -1066,14 +1066,14 @@ mod tests {
         }
 
         // Check that remaining starts where last confirmed ended
-        if let Some((remaining_start, _)) = sim.remaining_range {
-            if let Some((_, last_confirmed_end)) = sim.confirmed_ranges.last() {
-                assert_eq!(
-                    *last_confirmed_end, remaining_start,
-                    "Remaining should start at {} (where last confirmed ended), but starts at {}",
-                    last_confirmed_end, remaining_start
-                );
-            }
+        if let Some((remaining_start, _)) = sim.remaining_range
+            && let Some((_, last_confirmed_end)) = sim.confirmed_ranges.last()
+        {
+            assert_eq!(
+                *last_confirmed_end, remaining_start,
+                "Remaining should start at {} (where last confirmed ended), but starts at {}",
+                last_confirmed_end, remaining_start
+            );
         }
     }
 }
