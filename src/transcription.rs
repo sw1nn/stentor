@@ -33,7 +33,7 @@ impl Transcriber {
         whisper_rs::install_logging_hooks();
 
         let ctx_params = WhisperContextParameters::default();
-        let context = WhisperContext::new_with_params(&model_path.to_string_lossy(), ctx_params)
+        let context = WhisperContext::new_with_params(&model_path, ctx_params)
             .context("Failed to load Whisper model")?;
 
         let language = if language == "auto" {
