@@ -1,6 +1,6 @@
 [Unit]
 Description=Real-time transcription daemon
-Documentation=https://git.sw1nn.net/sw1nn/transcription-rs
+Documentation=https://code.sw1nn.net/sw1nn/transcription-rs
 After=graphical-session.target
 
 [Service]
