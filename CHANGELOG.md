@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.32.2 - 2026-08-28
+#### Miscellaneous Chores
+- (**packaging**) fix url - (1d9021b) - Neale Swinnerton
+
+- - -
+
 ## v0.32.1 - 2026-08-19
 #### Bug Fixes
 - (**transcription**) pass model path directly instead of via lossy string - (973371a) - Neale Swinnerton
