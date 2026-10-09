@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.34.0 - 2026-10-09
+#### Features
+- (**daemon**) log version at startup - (f54b88e) - Neale Swinnerton
+
+- - -
+
 ## v0.33.0 - 2026-10-09
 #### Features
 - (**dialog**) show the dialog as an overlay layer surface - (7025f80) - Neale Swinnerton
