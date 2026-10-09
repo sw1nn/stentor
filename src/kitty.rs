@@ -1074,6 +1074,10 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         slots.sort_unstable();
         slots
     }
+
+    fn has_target(&self, slot_num: usize) -> bool {
+        self.slot_window_ids.lock().contains_key(&slot_num)
+    }
 }
 
 #[cfg(test)]
@@ -1091,6 +1095,16 @@ mod tests {
             .lock()
             .extend([(3, 30), (1, 10), (2, 20)]);
         assert_eq!(handler.active_slots(), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn test_has_target_only_for_slots_with_window() {
+        let handler = KittyMultiSlotHandler::new(KittyConfig::default());
+        handler.slot_window_ids.lock().insert(1, 10);
+
+        assert!(handler.has_target(1));
+        assert!(!handler.has_target(0));
+        assert!(!handler.has_target(2));
     }
 
     // Tests for hex_to_rgb

@@ -1,7 +1,7 @@
 use anyhow::Result;
 use async_channel::Sender;
 use gtk4::prelude::*;
-use gtk4::{Application, glib};
+use gtk4::{Application, gio, glib};
 use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -20,6 +20,14 @@ use crate::kitty;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler as MultiSlotHandlerTrait};
 use crate::recording::{UIMessage, execute_output_command, start_recording_session};
 use crate::transcription::Transcriber;
+
+/// Show a desktop notification so text sent to a slot without a window is not silently lost.
+fn notify_undelivered(app: &Application, slot: usize, text: &str) {
+    let notification = gio::Notification::new("Transcription not delivered");
+    notification.set_body(Some(&format!("No window for slot {slot}.\n\n{text}")));
+    notification.set_priority(gio::NotificationPriority::High);
+    app.send_notification(None, &notification);
+}
 
 pub async fn run(
     config: Arc<Config>,
@@ -189,6 +197,7 @@ pub async fn run(
                         let kitty_window_ids: Arc<Mutex<Vec<u64>>> = Arc::new(Mutex::new(Vec::new()));
                         let kitty_window_ids_for_callbacks = Arc::clone(&kitty_window_ids);
                         let handler_for_close = handler.clone();
+                        let app_for_notify = app_clone.clone();
                         glib::MainContext::default().spawn_local(async move {
                             while let Ok(msg) = ui_rx.recv().await {
                                 tracing::trace!("UI message received: {:?}", msg);
@@ -236,6 +245,13 @@ pub async fn run(
                                         tracing::info!(?slots, "Resolved auto-send slots");
 
                                         for dest_num in slots {
+                                            if let Some(ref h) = handler_for_close
+                                                && !h.has_target(dest_num)
+                                            {
+                                                tracing::warn!(slot = dest_num, "No window for slot, transcription may not be delivered");
+                                                notify_undelivered(&app_for_notify, dest_num, &text);
+                                            }
+
                                             // Execute output command in background
                                             let cmd_str = output_command_for_auto_send.clone();
                                             let text = text.clone();

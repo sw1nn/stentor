@@ -29,4 +29,10 @@ pub trait MultiSlotHandler: Send + Sync {
     fn active_slots(&self) -> Vec<usize> {
         Vec::new()
     }
+
+    /// Return whether output for `slot_num` can reach a destination.
+    fn has_target(&self, slot_num: usize) -> bool {
+        let _ = slot_num;
+        true
+    }
 }
