@@ -27,9 +27,10 @@ pub enum DaemonCommand {
         multi_slot_handler: MultiSlotHandler,
     },
     Stop {
-        /// Destination slot to send transcription to (0 = default, 1-4 = specific slots)
+        /// Destination slot for the transcription. `None` sends to all active
+        /// multi-slot destinations, or to slot 0 when there are none.
         #[serde(default)]
-        command_slot: usize,
+        command_slot: Option<usize>,
     },
     Status,
     Quit,
@@ -243,12 +244,16 @@ mod tests {
         assert_eq!(cmd, parsed);
 
         // Test Stop with different slots
-        let cmd = DaemonCommand::Stop { command_slot: 0 };
+        let cmd = DaemonCommand::Stop {
+            command_slot: Some(0),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
 
-        let cmd = DaemonCommand::Stop { command_slot: 2 };
+        let cmd = DaemonCommand::Stop {
+            command_slot: Some(2),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
         assert_eq!(cmd, parsed);
@@ -296,13 +301,23 @@ mod tests {
     }
 
     #[test]
-    fn test_daemon_command_stop_default_slot() {
-        let json = r#"{"type":"stop"}"#;
-        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
-        match cmd {
-            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, 0),
-            _ => panic!("Expected Stop command"),
-        }
+    fn test_daemon_command_stop_default_slot() -> Result<()> {
+        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"stop"}"#)?;
+        assert_eq!(cmd, DaemonCommand::Stop { command_slot: None });
+        Ok(())
+    }
+
+    #[test]
+    fn test_daemon_command_stop_explicit_slot_zero() -> Result<()> {
+        // Older clients always send command_slot, so 0 must keep meaning slot 0.
+        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"stop","command_slot":0}"#)?;
+        assert_eq!(
+            cmd,
+            DaemonCommand::Stop {
+                command_slot: Some(0)
+            }
+        );
+        Ok(())
     }
 
     #[test]
@@ -355,7 +370,7 @@ mod tests {
         let json = r#"{"type":"stop","command_slot":3}"#;
         let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
         match cmd {
-            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, 3),
+            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, Some(3)),
             _ => panic!("Expected Stop command"),
         }
     }

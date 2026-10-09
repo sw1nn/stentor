@@ -148,9 +148,9 @@ pub enum UIMessage {
     /// Set both confirmed (white) and preview (grey) text
     /// (confirmed_text, preview_text)
     SetConfirmedAndPreview(String, String),
-    AutoSendText(String, usize), // Auto-send text to specified slot (text, slot_num)
+    AutoSendText(String, Option<usize>), // Auto-send text (text, slot); None = default target
     SetDestinations(Vec<crate::dialog::DestinationSlot>), // Update destination slots
-    StoreHandlerWindowIds(Vec<u64>), // Store window IDs managed by handler
+    StoreHandlerWindowIds(Vec<u64>),     // Store window IDs managed by handler
     CloseImmediately, // Close dialog immediately (for stop-and-send, cleanup happens later)
     Close,
 }
@@ -162,7 +162,7 @@ pub fn start_recording_session(
     stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     unmute_source: bool,
     source: Option<String>,
-    auto_send_slots: Arc<Mutex<Vec<usize>>>,
+    auto_send_slots: Arc<Mutex<Vec<Option<usize>>>>,
 ) -> Result<()> {
     tracing::info!("Starting recording session");
 

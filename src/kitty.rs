@@ -1068,12 +1068,30 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
 
         vars
     }
+
+    fn active_slots(&self) -> Vec<usize> {
+        let mut slots: Vec<usize> = self.slot_window_ids.lock().keys().copied().collect();
+        slots.sort_unstable();
+        slots
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_active_slots_sorted() {
+        let handler = KittyMultiSlotHandler::new(KittyConfig::default());
+        assert!(handler.active_slots().is_empty());
+
+        handler
+            .slot_window_ids
+            .lock()
+            .extend([(3, 30), (1, 10), (2, 20)]);
+        assert_eq!(handler.active_slots(), vec![1, 2, 3]);
+    }
 
     // Tests for hex_to_rgb
     #[test]

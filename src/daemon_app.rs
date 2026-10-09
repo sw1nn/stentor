@@ -74,8 +74,8 @@ pub async fn run(
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
         Arc::new(Mutex::new(None));
-    // Store the command slots to send to when Stop is called (Arc<Mutex<Vec<usize>>> to support multiple slots)
-    let auto_send_slots: Arc<Mutex<Vec<usize>>> = Arc::new(Mutex::new(Vec::new()));
+    // Command slots to send to when Stop is called; None = default target (all active slots, or slot 0)
+    let auto_send_slots: Arc<Mutex<Vec<Option<usize>>>> = Arc::new(Mutex::new(Vec::new()));
     // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
     let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
@@ -220,27 +220,42 @@ pub async fn run(
                                         dialog_for_updates.hide();
                                         // Don't break - wait for AutoSendText to do cleanup and close
                                     }
-                                    AutoSendText(text, dest_num) => {
-                                        tracing::debug!(dest_num, text = %text, "AutoSendText received");
+                                    AutoSendText(text, target) => {
+                                        tracing::debug!(?target, text = %text, "AutoSendText received");
 
-                                        // Execute output command in background
-                                        let cmd_str = output_command_for_auto_send.clone();
-                                        let extra_env_vars = handler_for_close
-                                            .as_ref()
-                                            .map(|h| h.output_env_vars(dest_num))
-                                            .unwrap_or_default();
-                                        tracing::info!("Output command configured: {:?}", cmd_str);
-                                        std::thread::spawn(move || {
-                                            tracing::debug!("Background thread started for slot {}", dest_num);
-                                            if let Some(ref cmd) = cmd_str {
-                                                tracing::info!("Executing output command for slot {}: {}", dest_num, cmd);
-                                                execute_output_command(cmd, &text, dest_num, &extra_env_vars);
-                                                tracing::debug!("Output command execution complete for slot {}", dest_num);
-                                            } else {
-                                                tracing::warn!("No output command configured for sending text");
-                                            }
-                                            tracing::debug!("Background processing complete for slot {}", dest_num);
-                                        });
+                                        // Match Alt+Enter in the dialog: no explicit slot means all
+                                        // active slots, or the default output when there are none.
+                                        let slots = match target {
+                                            Some(slot) => vec![slot],
+                                            None => handler_for_close
+                                                .as_ref()
+                                                .map(|h| h.active_slots())
+                                                .filter(|s| !s.is_empty())
+                                                .unwrap_or_else(|| vec![0]),
+                                        };
+                                        tracing::info!(?slots, "Resolved auto-send slots");
+
+                                        for dest_num in slots {
+                                            // Execute output command in background
+                                            let cmd_str = output_command_for_auto_send.clone();
+                                            let text = text.clone();
+                                            let extra_env_vars = handler_for_close
+                                                .as_ref()
+                                                .map(|h| h.output_env_vars(dest_num))
+                                                .unwrap_or_default();
+                                            tracing::info!(slot = dest_num, command = ?cmd_str, "Output command configured");
+                                            std::thread::spawn(move || {
+                                                tracing::debug!(slot = dest_num, "Background thread started");
+                                                if let Some(ref cmd) = cmd_str {
+                                                    tracing::info!(slot = dest_num, command = %cmd, "Executing output command");
+                                                    execute_output_command(cmd, &text, dest_num, &extra_env_vars);
+                                                    tracing::debug!(slot = dest_num, "Output command execution complete");
+                                                } else {
+                                                    tracing::warn!("No output command configured for sending text");
+                                                }
+                                                tracing::debug!(slot = dest_num, "Background processing complete");
+                                            });
+                                        }
                                         // Don't break - continue processing more AutoSendText messages
                                     }
                                     Close => {
@@ -405,7 +420,7 @@ pub async fn run(
                                 let _ = ui_tx_for_stop_and_send.send_blocking(UIMessage::CloseImmediately);
 
                                 // Store the destination slot for auto-send
-                                auto_send_slots_clone2.lock().push(dest_num);
+                                auto_send_slots_clone2.lock().push(Some(dest_num));
 
                                 // Trigger stop to finalize transcription (continues in background)
                                 let stop_tx_lock = stop_tx_clone2.lock();

@@ -24,4 +24,9 @@ pub trait MultiSlotHandler: Send + Sync {
         let _ = slot_num;
         Vec::new()
     }
+
+    /// Return the slots that currently have a destination, in ascending order.
+    fn active_slots(&self) -> Vec<usize> {
+        Vec::new()
+    }
 }

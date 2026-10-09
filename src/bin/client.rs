@@ -24,9 +24,10 @@ enum ClientCommand {
     },
     /// Stop recording and finalize transcription
     TranscribeEnd {
-        /// Destination slot for transcription (0 = default, 1-4 = specific slots)
-        #[arg(long, default_value = "0")]
-        slot: usize,
+        /// Destination slot for transcription (0 = default output, 1-4 = specific slots).
+        /// Without this option, send to all active slots in kitty mode, else to slot 0.
+        #[arg(long)]
+        slot: Option<usize>,
     },
     /// Launch a new terminal window with STENTOR_SLOT env var
     Launch {
@@ -64,7 +65,7 @@ enum ClientCommand {
   # Start recording with Kitty multi-slot handler
   stentorctl transcribe --multi-slot-handler=kitty
 
-  # Stop recording and finalize transcription (shows dialog)
+  # Stop and auto-send to all active slots (kitty mode) or default output
   stentorctl transcribe-end
 
   # Stop and auto-send to slot 1
