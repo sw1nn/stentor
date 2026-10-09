@@ -57,6 +57,8 @@ async fn main() -> Result<()> {
             .init();
     }
 
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "Starting stentord");
+
     // Initialize GTK and libadwaita
     adw::init().context("Failed to initialize libadwaita")?;
 
