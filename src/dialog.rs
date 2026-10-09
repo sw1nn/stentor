@@ -3,6 +3,7 @@ use gtk4::{
     Application, ApplicationWindow, Box, Button, DeleteType, Label, LevelBar, MovementStep,
     Orientation, ScrolledWindow, Spinner, TextView, gdk, glib,
 };
+use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use parking_lot::Mutex;
 use std::sync::Arc;
 
@@ -173,6 +174,17 @@ impl TranscriptionDialog {
             .default_height(180)
             .resizable(false)
             .build();
+
+        // An overlay layer surface floats above all windows like rofi, and
+        // leaves the compositor's active window unchanged.
+        if gtk4_layer_shell::is_supported() {
+            window.init_layer_shell();
+            window.set_namespace(Some("stentor"));
+            window.set_layer(Layer::Overlay);
+            window.set_keyboard_mode(KeyboardMode::Exclusive);
+        } else {
+            tracing::info!("Layer shell not supported, using a normal window for the dialog");
+        }
 
         // Main content box
         let main_box = Box::new(Orientation::Vertical, 0);

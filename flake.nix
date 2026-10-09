@@ -51,6 +51,7 @@
 
             # GUI (gtk4-sys, libadwaita-sys, and friends)
             gtk4
+            gtk4-layer-shell
             libadwaita
 
             # whisper-rs's vulkan feature links libvulkan directly
