@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.33.0 - 2026-10-09
+#### Features
+- (**dialog**) show the dialog as an overlay layer surface - (7025f80) - Neale Swinnerton
+#### Bug Fixes
+- (**client**) send to active slots when transcribe-end has no --slot - (c83f6d3) - Neale Swinnerton
+- (**kitty**) notify when a slot has no window - (57c2c5a) - Neale Swinnerton
+#### Miscellaneous Chores
+- (**deps**) bump deps - (3a399e8) - Neale Swinnerton
+- (**packaging**) Update license to SPDX format - (ce02eb4) - Neale Swinnerton
+- add .gitattributes - (5fee626) - Neale Swinnerton
+
+- - -
+
 ## v0.32.2 - 2026-08-28
 #### Miscellaneous Chores
 - (**packaging**) fix url - (1d9021b) - Neale Swinnerton
