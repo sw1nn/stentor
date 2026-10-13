@@ -123,18 +123,13 @@ pub async fn run(
                     }
                     // recording_active is now true - we own the recording session
 
-                    // Reset dialog state and set source info before cloning
+                    // Reset dialog state (fast). The microphone description is
+                    // looked up on a background thread so it never delays the UI
+                    // or the start of capture.
                     {
                         let mut dialog_ref = current_dialog_clone.borrow_mut();
                         let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
                         dialog.reset();
-
-                        // Get source info and set it while we have mutable borrow
-                        let source_name = match AudioRecorder::new(16000, source.clone(), config_clone.chunk_size) {
-                            Ok(recorder) => recorder.get_device_name().unwrap_or_else(|_| "Default".to_string()),
-                            Err(_) => "Default".to_string(),
-                        };
-                        dialog.set_source_info(&source_name);
                     }
 
                         // Create UI update channel with backpressure
@@ -142,6 +137,25 @@ pub async fn run(
                         let (ui_tx, ui_rx) =
                             async_channel::bounded::<UIMessage>(defaults::UI_MESSAGE_CHANNEL_CAPACITY);
                         *current_ui_tx_clone.borrow_mut() = Some(ui_tx.clone());
+
+                        // Resolve the microphone description off the critical path.
+                        // This may involve a PulseAudio round trip; doing it here
+                        // would delay both the visible dialog and the start of
+                        // capture.
+                        {
+                            let ui_tx = ui_tx.clone();
+                            let source = source.clone();
+                            let chunk_size = config_clone.chunk_size;
+                            thread::spawn(move || {
+                                let name = match AudioRecorder::new(16000, source, chunk_size) {
+                                    Ok(recorder) => recorder
+                                        .get_device_name()
+                                        .unwrap_or_else(|_| "Default".to_string()),
+                                    Err(_) => "Default".to_string(),
+                                };
+                                let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo(name));
+                            });
+                        }
 
                         // Setup multi-slot handler in background if requested
                         // Store handler for cleanup later
@@ -211,6 +225,9 @@ pub async fn run(
                                     }
                                     SetTextPreview(text) => {
                                         dialog_for_updates.set_text_preview(&text);
+                                    }
+                                    SetSourceInfo(name) => {
+                                        dialog_for_updates.set_source_info(&name);
                                     }
                                     SetConfirmedAndPreview(confirmed, preview) => {
                                         dialog_for_updates
@@ -462,6 +479,7 @@ pub async fn run(
                         let config_clone = Arc::clone(&config_clone);
                         let transcriber_clone = Arc::clone(&transcriber_clone);
                         let ui_tx_for_recording = ui_tx.clone();
+                        let ui_tx_for_recording_error = ui_tx_for_recording.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
                         let auto_send_for_recording = Arc::clone(&auto_send_slots_clone);
                         let recording_active_for_thread = Arc::clone(&recording_active_clone);
@@ -482,7 +500,16 @@ pub async fn run(
                                     tracing::info!("Recording session completed");
                                 }
                                 Err(e) => {
+                                    // Surface the failure in the dialog instead of
+                                    // leaving it stuck on "Listening...".
                                     tracing::error!("Recording session error: {}", e);
+                                    let _ = ui_tx_for_recording_error.send_blocking(
+                                        UIMessage::UpdateState(
+                                            TranscriptionState::Error,
+                                            format!("Audio unavailable: {e}"),
+                                            0.0,
+                                        ),
+                                    );
                                 }
                             }
                             // Clear stop_tx and auto_send_slots when done

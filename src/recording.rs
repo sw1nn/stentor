@@ -151,6 +151,9 @@ pub enum UIMessage {
     AutoSendText(String, Option<usize>), // Auto-send text (text, slot); None = default target
     SetDestinations(Vec<crate::dialog::DestinationSlot>), // Update destination slots
     StoreHandlerWindowIds(Vec<u64>),     // Store window IDs managed by handler
+    /// Set the microphone description shown in the UI. Looked up off the
+    /// critical path so capture can start immediately.
+    SetSourceInfo(String),
     CloseImmediately, // Close dialog immediately (for stop-and-send, cleanup happens later)
     Close,
 }
@@ -182,16 +185,13 @@ pub fn start_recording_session(
         None
     };
 
-    // Create audio recorder with optional source selection
+    // Create audio recorder with optional source selection.
+    // No PulseAudio introspection here: capture must start as fast as possible.
+    // The microphone description shown in the UI is looked up on a background
+    // thread by the daemon, not on this path.
     let recorder = AudioRecorder::new(16000, source, config.chunk_size)?;
 
-    // Log which microphone is being used
-    let device_name = recorder
-        .get_device_name()
-        .unwrap_or_else(|_| "Unknown".to_string());
-    tracing::info!(microphone = %device_name, "Recording with microphone: {device_name}");
-
-    // Get the ACTUAL sample rate the device is using (not what we requested)
+    // PulseAudio resamples to the requested rate, so this is what we get.
     let actual_sample_rate = recorder.get_actual_sample_rate()?;
 
     // Channels for audio data

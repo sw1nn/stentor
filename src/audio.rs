@@ -204,21 +204,11 @@ impl AudioRecorder {
     where
         S: Into<String>,
     {
+        // No PulseAudio introspection here. This runs on the capture critical
+        // path, and a round trip (with its own mainloop) costs hundreds of
+        // milliseconds. An invalid source now surfaces as a stream-open error
+        // when recording starts.
         let source_name = source_name.map(Into::into);
-        // Validate that the source exists if specified
-        if let Some(ref name) = source_name {
-            tracing::info!("Looking for audio source: {}", name);
-
-            // Check if source exists using PulseIntrospector
-            let mut introspector = PulseIntrospector::new()?;
-            if !introspector.source_exists(name)? {
-                anyhow::bail!("Audio source '{}' not found", name);
-            }
-
-            tracing::info!("Found audio source: {}", name);
-        } else {
-            tracing::info!("Using default audio source");
-        }
 
         Ok(Self {
             source_name,
