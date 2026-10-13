@@ -144,6 +144,15 @@ fn send_kitty_command<T: Serialize>(cmd: KittyCommand<T>) -> Result<()> {
     Ok(())
 }
 
+/// Byte offset just past the DCS frame terminator (`ESC \`), if the frame is
+/// complete. kitty serialises the payload as JSON, so a literal `ESC` only
+/// occurs as part of the terminator.
+fn dcs_frame_end(data: &[u8]) -> Option<usize> {
+    data.windows(2)
+        .position(|pair| pair == b"\x1b\\")
+        .map(|pos| pos + 2)
+}
+
 pub fn list_kitty_windows() -> Result<Value> {
     let socket_name = get_kitty_socket_name()?;
     let addr = std::os::unix::net::SocketAddr::from_abstract_name(socket_name.as_bytes())
@@ -170,6 +179,13 @@ pub fn list_kitty_windows() -> Result<Value> {
             Ok(n) => {
                 tracing::trace!("Read {} bytes", n);
                 resp.extend_from_slice(&buffer[..n]);
+                // kitty keeps the connection open after replying, so stop at
+                // the DCS frame terminator (ESC \) rather than waiting for the
+                // read timeout.
+                if let Some(frame_end) = dcs_frame_end(&resp) {
+                    resp.truncate(frame_end);
+                    break;
+                }
             }
             Err(e)
                 if e.kind() == std::io::ErrorKind::WouldBlock
@@ -1084,6 +1100,18 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn test_dcs_frame_end_finds_terminator() {
+        assert_eq!(dcs_frame_end(b"abc\x1b\\"), Some(5));
+        assert_eq!(dcs_frame_end(b"\x1b\\tail"), Some(2));
+    }
+
+    #[test]
+    fn test_dcs_frame_end_incomplete() {
+        assert_eq!(dcs_frame_end(b"abc"), None);
+        assert_eq!(dcs_frame_end(b"abc\x1b"), None);
+    }
 
     #[test]
     fn test_active_slots_sorted() {
