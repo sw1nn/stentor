@@ -1,15 +1,28 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
+use parking_lot::Mutex;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use whisper_rs::{
-    FullParams, SamplingStrategy, SegmentCallbackData, WhisperContext, WhisperContextParameters,
+    FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters, WhisperState,
 };
 
 pub struct Transcriber {
-    context: WhisperContext,
     language: Option<String>,
+    /// Reused across calls. Guarded by a mutex; only one transcription runs at
+    /// a time. The state keeps an internal reference to the context alive.
+    state: Mutex<WhisperState>,
+    /// Decoder worker threads.
+    n_threads: i32,
+}
+
+/// Worker threads for decoding. whisper.cpp defaults to `min(4, cores)`, which
+/// underuses larger CPUs.
+fn thread_count() -> i32 {
+    std::thread::available_parallelism()
+        .map(|n| n.get().clamp(1, 8) as i32)
+        .unwrap_or(4)
 }
 
 impl Transcriber {
@@ -36,13 +49,21 @@ impl Transcriber {
         let context = WhisperContext::new_with_params(&model_path, ctx_params)
             .context("Failed to load Whisper model")?;
 
+        let state = context
+            .create_state()
+            .context("Failed to create Whisper state")?;
+
         let language = if language == "auto" {
             None
         } else {
             Some(language)
         };
 
-        Ok(Self { context, language })
+        Ok(Self {
+            language,
+            state: Mutex::new(state),
+            n_threads: thread_count(),
+        })
     }
 
     /// Get the path to the Whisper model file, downloading if necessary
@@ -170,51 +191,34 @@ impl Transcriber {
         Ok(())
     }
 
-    /// Transcribe audio data with a callback for real-time segment updates
+    /// Transcribe audio data
     ///
     /// Audio should be mono, 16kHz sample rate, f32 format
-    /// The callback is called in real-time as each segment is decoded during transcription
-    pub fn transcribe_with_realtime_callback<F>(
-        &self,
-        audio_data: &[f32],
-        mut callback: F,
-    ) -> Result<String>
-    where
-        F: FnMut(&str) + Send + 'static,
-    {
-        // Create state
-        let mut state = self
-            .context
-            .create_state()
-            .context("Failed to create Whisper state")?;
+    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
+        let mut state = self.state.lock();
 
-        // Configure transcription parameters
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
 
-        // Set language if specified
-        if let Some(ref lang) = self.language {
-            params.set_language(Some(lang));
+        if let Some(language) = self.language.as_deref() {
+            params.set_language(Some(language));
         }
 
-        // Disable printing to console
+        params.set_n_threads(self.n_threads);
+        // Each utterance is decoded independently; do not carry text context
+        // from a previous call into this one.
+        params.set_no_context(true);
+        // Suppress non-speech tokens, which reduces hallucination on noise.
+        params.set_suppress_nst(true);
+
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
 
-        // Set up real-time segment callback
-        params.set_segment_callback_safe(move |segment_data: SegmentCallbackData| {
-            callback(&segment_data.text);
-        });
-
-        // Process audio
-        let result = state
+        state
             .full(params, audio_data)
-            .context("Failed to transcribe audio");
+            .context("Failed to transcribe audio")?;
 
-        result?;
-
-        // Extract complete transcribed text
         let num_segments = state.full_n_segments();
 
         let mut text = String::new();
@@ -229,50 +233,15 @@ impl Transcriber {
         Ok(text.trim().to_string())
     }
 
-    /// Transcribe audio data
-    ///
-    /// Audio should be mono, 16kHz sample rate, f32 format
-    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
-        // Convert audio to the format whisper-rs expects
-        let mut state = self
-            .context
-            .create_state()
-            .context("Failed to create Whisper state")?;
-
-        // Configure transcription parameters
-        let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
-
-        // Set language if specified
-        if let Some(ref lang) = self.language {
-            params.set_language(Some(lang));
+    /// Run one discarded transcription so the first real dictation does not pay
+    /// for GPU graph compilation and buffer allocation.
+    pub fn warm_up(&self) {
+        let silence = vec![0.0f32; 16_000];
+        if let Err(e) = self.transcribe(&silence) {
+            tracing::debug!(error = %e, "Whisper warm-up failed (non-fatal)");
+        } else {
+            tracing::info!("Whisper warm-up complete");
         }
-
-        // Disable printing to console
-        params.set_print_special(false);
-        params.set_print_progress(false);
-        params.set_print_realtime(false);
-        params.set_print_timestamps(false);
-
-        // Process audio
-        let result = state
-            .full(params, audio_data)
-            .context("Failed to transcribe audio");
-
-        result?;
-
-        // Extract transcribed text
-        let num_segments = state.full_n_segments();
-
-        let mut text = String::new();
-        for i in 0..num_segments {
-            if let Some(segment) = state.get_segment(i)
-                && let Ok(segment_text) = segment.to_str_lossy()
-            {
-                text.push_str(&segment_text);
-            }
-        }
-
-        Ok(text.trim().to_string())
     }
 }
 

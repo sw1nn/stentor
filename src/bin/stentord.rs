@@ -114,6 +114,13 @@ async fn main() -> Result<()> {
     let transcriber = Arc::new(transcriber);
     tracing::info!("Whisper model loaded successfully");
 
+    // Compile GPU graphs and allocate buffers on a background thread so daemon
+    // startup is not delayed and the first dictation is not slowed by it.
+    {
+        let transcriber = Arc::clone(&transcriber);
+        std::thread::spawn(move || transcriber.warm_up());
+    }
+
     // Determine socket path
     let socket_path = if let Some(custom_socket) = cli.socket {
         custom_socket
