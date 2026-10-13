@@ -130,6 +130,7 @@ use async_channel::Sender;
 use parking_lot::Mutex;
 use std::collections::VecDeque;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
 use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
@@ -216,11 +217,15 @@ pub fn start_recording_session(
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<RecordingCommand>();
     let stop_rx = Arc::new(Mutex::new(stop_rx));
 
+    // Set by the audio thread if reading fails (e.g. the audio server went
+    // away), as opposed to a requested stop.
+    let stream_error = Arc::new(AtomicBool::new(false));
+
     // Store stop_tx BEFORE starting recording so Escape key can use it
     *stop_tx_storage.lock() = Some(stop_tx);
 
     // Start audio stream (runs in background thread)
-    recorder.start_recording(chunk_tx, stop_rx)?;
+    recorder.start_recording(chunk_tx, stop_rx, Arc::clone(&stream_error))?;
 
     // Use VAD to detect speech start and silence
     // IMPORTANT: Use the ACTUAL sample rate from the device, not the requested rate
@@ -633,7 +638,7 @@ pub fn start_recording_session(
                 continue;
             }
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                tracing::info!("Audio stream stopped (user pressed Escape)");
+                tracing::info!("Audio stream ended");
                 break;
             }
         }
@@ -644,6 +649,21 @@ pub fn start_recording_session(
     // Wait for any in-flight transcription to complete before reading final values
     // Hold the lock while reading to ensure consistency
     let _transcription_guard = transcription_in_flight.lock();
+
+    // A read failure means the audio server went away (for example a
+    // PulseAudio or PipeWire restart) rather than a requested stop. End the
+    // session cleanly with an error instead of reporting "no speech detected".
+    if stream_error.load(Ordering::Acquire) {
+        tracing::warn!("Audio source disconnected; ending session");
+        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+            TranscriptionState::Error,
+            "Audio source disconnected".to_string(),
+            0.0,
+        ));
+        thread::sleep(defaults::ERROR_DISPLAY_DURATION);
+        let _ = ui_tx.send_blocking(UIMessage::Close);
+        return Ok(());
+    }
 
     // Get confirmed text so far (safe - we hold the transcription lock)
     let mut final_text = confirmed_text.lock().clone();

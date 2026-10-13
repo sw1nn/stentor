@@ -10,6 +10,7 @@ use parking_lot::Mutex;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 
 use crate::defaults;
@@ -238,6 +239,7 @@ impl AudioRecorder {
         &self,
         chunk_tx: Sender<AudioChunk>,
         cmd_rx: Arc<Mutex<Receiver<RecordingCommand>>>,
+        stream_error: Arc<AtomicBool>,
     ) -> Result<()> {
         // Create sample spec
         let spec = Spec {
@@ -312,6 +314,10 @@ impl AudioRecorder {
                     }
                     Err(e) => {
                         tracing::error!("Failed to read audio: {:?}", e);
+                        // Distinguish an infrastructure failure (e.g. the
+                        // PulseAudio / PipeWire server went away) from a
+                        // requested stop, so the session can report it.
+                        stream_error.store(true, Ordering::Release);
                         break;
                     }
                 }
