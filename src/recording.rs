@@ -40,6 +40,10 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::{Duration, Instant};
+
+/// Minimum interval between level-bar updates sent to the UI.
+const LEVEL_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
 use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceActivityDetector};
 use crate::config::Config;
@@ -269,6 +273,26 @@ fn tail_prompt(text: &str) -> String {
     text[start..].to_owned()
 }
 
+/// Send a UI state and audio-level update, throttled to `LEVEL_UPDATE_INTERVAL`
+/// so the UI is not flooded at the audio chunk rate.
+fn send_level_update(
+    ui_tx: &Sender<UIMessage>,
+    state: TranscriptionState,
+    message: &str,
+    rms: f32,
+    last: &mut Option<Instant>,
+) {
+    let now = Instant::now();
+    if last.is_none_or(|previous| now.duration_since(previous) >= LEVEL_UPDATE_INTERVAL) {
+        *last = Some(now);
+        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+            state,
+            message.to_string(),
+            rms as f64,
+        ));
+    }
+}
+
 pub fn start_recording_session(
     session: RecordingSession,
     unmute_source: bool,
@@ -354,6 +378,7 @@ pub fn start_recording_session(
     let mut silence_chunks = 0;
     let mut speech_chunks = 0;
     let mut transcription_started = false;
+    let mut last_level_update: Option<Instant> = None;
 
     // Calculate periodic transcription threshold in chunks
     let periodic_chunks_threshold = (config.periodic_transcription_interval
@@ -468,19 +493,14 @@ pub fn start_recording_session(
                             tracing::info!(
                                 "Speech detected! Transcription will run periodically..."
                             );
-                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-                                TranscriptionState::Processing,
-                                "Recording...".to_string(),
-                                rms as f64,
-                            ));
-                        } else {
-                            // Update UI with audio level
-                            let _ = ui_tx.send_blocking(UIMessage::UpdateState(
-                                TranscriptionState::Processing,
-                                "Recording...".to_string(),
-                                rms as f64,
-                            ));
                         }
+                        send_level_update(
+                            &ui_tx,
+                            TranscriptionState::Processing,
+                            "Recording...",
+                            rms,
+                            &mut last_level_update,
+                        );
 
                         // Periodic transcription while speaking
                         if chunks_since_last_transcription >= periodic_chunks_threshold
@@ -501,11 +521,13 @@ pub fn start_recording_session(
                         recorded_audio.push(chunk.data);
 
                         // Update UI with audio level
-                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                        send_level_update(
+                            &ui_tx,
                             TranscriptionState::Processing,
-                            "Transcribing...".to_string(),
-                            rms as f64,
-                        ));
+                            "Transcribing...",
+                            rms,
+                            &mut last_level_update,
+                        );
 
                         // Trigger periodic transcription even during silence
                         // (VAD might be wrong, user might still be speaking quietly)
@@ -541,11 +563,13 @@ pub fn start_recording_session(
                         }
 
                         // Still waiting for speech
-                        let _ = ui_tx.send_blocking(UIMessage::UpdateState(
+                        send_level_update(
+                            &ui_tx,
                             TranscriptionState::Recording,
-                            "Listening...".to_string(),
-                            rms as f64,
-                        ));
+                            "Listening...",
+                            rms,
+                            &mut last_level_update,
+                        );
                     }
                 }
             }
