@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.35.0 - 2026-10-13
+#### Features
+- (**audio**) supervise a long-lived PulseAudio context - (121dfe4) - Neale Swinnerton
+#### Bug Fixes
+- (**audio**) end the session with an error when the audio source is lost - (275e65c) - Neale Swinnerton
+#### Performance Improvements
+- (**capture**) keep a short pre-roll so soft speech onsets are not clipped - (43acfdd) - Neale Swinnerton
+- (**capture**) remove blocking PulseAudio lookups from capture start - (abb78da) - Neale Swinnerton
+#### Refactoring
+- (**dialog**) use a plain window for the layer-shell overlay - (fad993d) - Neale Swinnerton
+
+- - -
+
 ## v0.34.0 - 2026-10-09
 #### Features
 - (**daemon**) log version at startup - (f54b88e) - Neale Swinnerton
