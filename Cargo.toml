@@ -66,6 +66,9 @@ fontconfig = "0.11"
 # Base64 encoding for kitty image protocol
 base64 = "0.23"
 
+# Hashing (model download verification)
+sha2 = "0.10"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

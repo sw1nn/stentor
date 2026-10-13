@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -77,22 +78,25 @@ fn legacy_model_dirs() -> Vec<PathBuf> {
     dirs
 }
 
-/// Stream `reader` into `path`, updating `progress`.
-fn stream_to_file<R>(mut reader: R, path: &Path, progress: &ProgressBar) -> Result<()>
+/// Stream `reader` into `path`, updating `progress`, and return the SHA-256 of
+/// the bytes written.
+fn stream_to_file<R>(mut reader: R, path: &Path, progress: &ProgressBar) -> Result<Vec<u8>>
 where
     R: io::Read,
 {
     let file = fs::File::create(path)
         .with_context(|| format!("Failed to create file: {}", path.display()))?;
 
-    struct ProgressWriter<W: Write> {
+    struct HashingWriter<W: Write> {
         writer: W,
+        hasher: Sha256,
         progress_bar: ProgressBar,
     }
 
-    impl<W: Write> Write for ProgressWriter<W> {
+    impl<W: Write> Write for HashingWriter<W> {
         fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
             let written = self.writer.write(buf)?;
+            self.hasher.update(&buf[..written]);
             self.progress_bar.inc(written as u64);
             Ok(written)
         }
@@ -102,13 +106,64 @@ where
         }
     }
 
-    let mut writer = ProgressWriter {
+    let mut writer = HashingWriter {
         writer: file,
+        hasher: Sha256::new(),
         progress_bar: progress.clone(),
     };
 
     io::copy(&mut reader, &mut writer).context("Failed to write response to file")?;
-    Ok(())
+    Ok(writer.hasher.finalize().to_vec())
+}
+
+/// Model metadata published by HuggingFace.
+struct ExpectedChecksum {
+    size: u64,
+    sha256: String,
+}
+
+/// Fetch the published size and SHA-256 for a model from the HuggingFace API.
+/// Returns `None` if the metadata cannot be retrieved.
+fn expected_model_checksum(model_size: &str) -> Option<ExpectedChecksum> {
+    let file_name = format!("ggml-{model_size}.bin");
+    let url = "https://huggingface.co/api/models/ggerganov/whisper.cpp?blobs=true";
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()
+        .ok()?;
+    let response = client.get(url).send().ok()?;
+    if !response.status().is_success() {
+        return None;
+    }
+    let body = response.text().ok()?;
+    let json: serde_json::Value = serde_json::from_str(&body).ok()?;
+    for sibling in json.get("siblings")?.as_array()? {
+        if sibling.get("rfilename").and_then(|value| value.as_str()) != Some(file_name.as_str()) {
+            continue;
+        }
+        let lfs = sibling.get("lfs")?;
+        let sha256 = lfs
+            .get("sha256")
+            .and_then(|value| value.as_str())?
+            .to_owned();
+        let size = lfs
+            .get("size")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        return Some(ExpectedChecksum { size, sha256 });
+    }
+    None
+}
+
+/// Decode a hex string into bytes.
+fn hex_decode(hex: &str) -> Option<Vec<u8>> {
+    if !hex.len().is_multiple_of(2) {
+        return None;
+    }
+    (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
+        .collect()
 }
 
 impl Transcriber {
@@ -213,11 +268,19 @@ impl Transcriber {
             );
         }
 
-        let total_size = response
+        let content_length = response
             .content_length()
             .context("Failed to get content length")?;
 
-        let progress = ProgressBar::new(total_size);
+        // Published size and checksum, when the metadata can be reached.
+        let expected = expected_model_checksum(model_size);
+        let expected_size = expected
+            .as_ref()
+            .map(|expected| expected.size)
+            .filter(|size| *size > 0)
+            .unwrap_or(content_length);
+
+        let progress = ProgressBar::new(content_length);
         progress.set_style(
             ProgressStyle::default_bar()
                 .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
@@ -228,17 +291,29 @@ impl Transcriber {
 
         let temp_path = target_path.with_extension("bin.part");
 
-        if let Err(e) = stream_to_file(response, &temp_path, &progress) {
-            let _ = fs::remove_file(&temp_path);
-            progress.finish_and_clear();
-            return Err(e);
-        }
+        let digest = match stream_to_file(response, &temp_path, &progress) {
+            Ok(digest) => digest,
+            Err(e) => {
+                let _ = fs::remove_file(&temp_path);
+                progress.finish_and_clear();
+                return Err(e);
+            }
+        };
 
         let written = fs::metadata(&temp_path).map(|meta| meta.len()).unwrap_or(0);
-        if written != total_size {
+        if written != expected_size {
             let _ = fs::remove_file(&temp_path);
             progress.finish_and_clear();
-            anyhow::bail!("Incomplete model download: got {written} of {total_size} bytes");
+            anyhow::bail!("Incomplete model download: got {written} of {expected_size} bytes");
+        }
+
+        if let Some(expected) = &expected
+            && let Some(expected_digest) = hex_decode(&expected.sha256)
+            && expected_digest != digest
+        {
+            let _ = fs::remove_file(&temp_path);
+            progress.finish_and_clear();
+            anyhow::bail!("Checksum mismatch for ggml-{model_size}.bin");
         }
 
         fs::rename(&temp_path, target_path).with_context(|| {
@@ -387,5 +462,13 @@ mod tests {
     fn test_model_dir_ends_with_whisper() {
         let dir = model_dir().expect("model_dir");
         assert!(dir.ends_with("whisper"), "{}", dir.display());
+    }
+
+    #[test]
+    fn test_hex_decode() {
+        assert_eq!(hex_decode("00ff10"), Some(vec![0x00, 0xff, 0x10]));
+        assert_eq!(hex_decode(""), Some(Vec::new()));
+        assert_eq!(hex_decode("abc"), None, "odd length");
+        assert_eq!(hex_decode("zz"), None, "invalid digits");
     }
 }
