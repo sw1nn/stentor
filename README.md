@@ -7,7 +7,7 @@ Real-time voice transcription daemon using OpenAI's Whisper model. Stentor provi
 - **Real-time transcription** with periodic preview updates while speaking
 - **Voice Activity Detection (VAD)** automatically starts/stops recording based on speech
 - **Confirmed/preview text display** - stable text in white, tentative text in grey
-- **Multiple Whisper models** - tiny, base, small, medium, large
+- **Multiple Whisper models** - tiny, base, small, medium, large, large-v3-turbo
 - **PulseAudio integration** with configurable audio source
 - **Multi-slot output** - send transcriptions to multiple Kitty terminal windows
 - **Configurable output commands** - clipboard, tmux, xdotool, or custom scripts
@@ -74,7 +74,7 @@ cp config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `model` | `"base"` | Whisper model size: tiny, base, small, medium, large |
+| `model` | `"base"` | Whisper model: tiny, base, small, medium, large (= large-v3), large-v1/v2/v3, large-v3-turbo |
 | `language` | `"en"` | ISO 639-1 language code, or "auto" for detection |
 | `silence-duration` | `2.0` | Seconds of silence before stopping recording |
 | `silence-threshold` | `0.002` | RMS threshold for silence detection (lower = more sensitive) |

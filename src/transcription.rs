@@ -37,6 +37,12 @@ pub struct TranscribedSegment {
 /// distinct GPU compute graphs. Each bucket covers `bucket * 320` samples.
 const AUDIO_CTX_BUCKETS: [i32; 4] = [256, 512, 1024, 1500];
 
+/// Hugging Face repository the GGML models are downloaded from.
+///
+/// Point this at a fork or mirror to control the supply chain. The published
+/// SHA-256 is checked against this repository's metadata after download.
+const MODEL_REPO: &str = "ggerganov/whisper.cpp";
+
 /// Smallest encoder-context bucket that covers `samples` samples.
 ///
 /// The mel has one frame per 160 samples and the encoder consumes two frames
@@ -76,6 +82,19 @@ fn legacy_model_dirs() -> Vec<PathBuf> {
         }
     }
     dirs
+}
+
+/// Map a user-facing model name to the upstream GGML file stem.
+///
+/// `large` is an alias for the latest large model, `large-v3`, and `turbo` maps
+/// to `large-v3-turbo`. Other names pass through unchanged, so any tier that
+/// exists upstream can be selected.
+fn model_file_stem(model_name: &str) -> String {
+    match model_name {
+        "large" => "large-v3".to_owned(),
+        "turbo" => "large-v3-turbo".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 /// Stream `reader` into `path`, updating `progress`, and return the SHA-256 of
@@ -124,9 +143,9 @@ struct ExpectedChecksum {
 
 /// Fetch the published size and SHA-256 for a model from the HuggingFace API.
 /// Returns `None` if the metadata cannot be retrieved.
-fn expected_model_checksum(model_size: &str) -> Option<ExpectedChecksum> {
-    let file_name = format!("ggml-{model_size}.bin");
-    let url = "https://huggingface.co/api/models/ggerganov/whisper.cpp?blobs=true";
+fn expected_model_checksum(stem: &str) -> Option<ExpectedChecksum> {
+    let file_name = format!("ggml-{stem}.bin");
+    let url = format!("https://huggingface.co/api/models/{MODEL_REPO}?blobs=true");
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -170,7 +189,7 @@ impl Transcriber {
     /// Create a new transcriber with the specified model
     ///
     /// Model files should be in GGML format and located at:
-    /// ~/.local/share/whisper/ggml-{model_size}.bin
+    /// ~/.local/share/whisper/ggml-<model>.bin
     pub fn new<M, L>(model_size: M, language: L) -> Result<Self>
     where
         M: Into<String>,
@@ -213,7 +232,8 @@ impl Transcriber {
     /// legacy location (`~/.local/whisper`) and the current directory are also
     /// searched, so existing installations keep working.
     fn get_model_path(model_size: &str) -> Result<PathBuf> {
-        let file_name = format!("ggml-{model_size}.bin");
+        let stem = model_file_stem(model_size);
+        let file_name = format!("ggml-{stem}.bin");
 
         // Preferred location, and where a missing model is downloaded to.
         let model_path = model_dir()?.join(&file_name);
@@ -235,7 +255,7 @@ impl Transcriber {
         }
 
         tracing::info!("Model not found, downloading {file_name}...");
-        Self::download_model(model_size, &model_path)?;
+        Self::download_model(&stem, &model_path)?;
         Ok(model_path)
     }
 
@@ -244,7 +264,7 @@ impl Transcriber {
     /// The download is written to a temporary file, checked for completeness
     /// against the advertised length, and only then moved into place. An
     /// interrupted download is therefore never mistaken for a complete model.
-    fn download_model<P>(model_size: &str, target_path: P) -> Result<()>
+    fn download_model<P>(stem: &str, target_path: P) -> Result<()>
     where
         P: AsRef<Path>,
     {
@@ -253,9 +273,7 @@ impl Transcriber {
             fs::create_dir_all(parent).context("Failed to create model directory")?;
         }
 
-        let url = format!(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{model_size}.bin"
-        );
+        let url = format!("https://huggingface.co/{MODEL_REPO}/resolve/main/ggml-{stem}.bin");
         tracing::info!(url, path = %target_path.display(), "Downloading Whisper model");
 
         let response = reqwest::blocking::get(&url)
@@ -263,7 +281,7 @@ impl Transcriber {
 
         if !response.status().is_success() {
             anyhow::bail!(
-                "Failed to download model: HTTP {}. Model '{model_size}' may not exist.",
+                "Failed to download model: HTTP {}. Model '{stem}' may not exist.",
                 response.status()
             );
         }
@@ -273,7 +291,7 @@ impl Transcriber {
             .context("Failed to get content length")?;
 
         // Published size and checksum, when the metadata can be reached.
-        let expected = expected_model_checksum(model_size);
+        let expected = expected_model_checksum(stem);
         let expected_size = expected
             .as_ref()
             .map(|expected| expected.size)
@@ -287,7 +305,7 @@ impl Transcriber {
                 .context("Invalid progress template")?
                 .progress_chars("#>-"),
         );
-        progress.set_message(format!("Downloading ggml-{model_size}.bin"));
+        progress.set_message(format!("Downloading ggml-{stem}.bin"));
 
         let temp_path = target_path.with_extension("bin.part");
 
@@ -313,13 +331,13 @@ impl Transcriber {
         {
             let _ = fs::remove_file(&temp_path);
             progress.finish_and_clear();
-            anyhow::bail!("Checksum mismatch for ggml-{model_size}.bin");
+            anyhow::bail!("Checksum mismatch for ggml-{stem}.bin");
         }
 
         fs::rename(&temp_path, target_path).with_context(|| {
             format!("Failed to move model into place: {}", target_path.display())
         })?;
-        progress.finish_with_message(format!("Downloaded ggml-{model_size}.bin successfully!"));
+        progress.finish_with_message(format!("Downloaded ggml-{stem}.bin successfully!"));
 
         Ok(())
     }
@@ -470,5 +488,13 @@ mod tests {
         assert_eq!(hex_decode(""), Some(Vec::new()));
         assert_eq!(hex_decode("abc"), None, "odd length");
         assert_eq!(hex_decode("zz"), None, "invalid digits");
+    }
+
+    #[test]
+    fn test_model_file_stem() {
+        assert_eq!(model_file_stem("base"), "base");
+        assert_eq!(model_file_stem("large"), "large-v3", "large is an alias");
+        assert_eq!(model_file_stem("turbo"), "large-v3-turbo");
+        assert_eq!(model_file_stem("large-v2"), "large-v2", "passes through");
     }
 }

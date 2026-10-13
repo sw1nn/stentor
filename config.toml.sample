@@ -2,7 +2,8 @@
 # Place this file at: ${XDG_CONFIG_HOME}/stentor/config.toml
 
 [daemon]
-# Whisper model size: tiny, base, small, medium, large
+# Whisper model: tiny, base, small, medium, large (alias for large-v3),
+# large-v1, large-v2, large-v3, large-v3-turbo
 # Larger models are more accurate but slower and require more memory
 # Default: base (good balance of accuracy and speed)
 model = "base"

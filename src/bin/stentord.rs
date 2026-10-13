@@ -15,8 +15,15 @@ use stentor::transcription::Transcriber;
     after_help = "Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.\nCommand-line arguments override config file settings."
 )]
 struct Cli {
-    /// Whisper model size
-    #[arg(long, value_parser = ["tiny", "base", "small", "medium", "large"])]
+    /// Whisper model: tiny, base, small, medium, large (alias for large-v3),
+    /// large-v1, large-v2, large-v3, large-v3-turbo (alias for large-v3-turbo)
+    #[arg(
+        long,
+        value_parser = [
+            "tiny", "base", "small", "medium",
+            "large", "large-v1", "large-v2", "large-v3", "large-v3-turbo", "turbo",
+        ]
+    )]
     model: Option<String>,
 
     /// Language code for transcription (default: from config or 'en')
