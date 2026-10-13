@@ -110,6 +110,11 @@ impl TranscriptionPipeline {
         !self.pending.swap(true, Ordering::AcqRel)
     }
 
+    /// Whether a worker is queued or running.
+    fn is_pending(&self) -> bool {
+        self.pending.load(Ordering::Acquire)
+    }
+
     /// Decode `audio` (starting at chunk `first_chunk`) on a worker thread.
     ///
     /// Segments ending at or before `settled` are committed to the confirmed
@@ -426,6 +431,19 @@ pub fn start_recording_session(
                 // Detect transition from Speaking to SilenceAfterSpeech
                 let transitioned_to_silence = previous_vad_state == VadState::Speaking
                     && vad_state == VadState::SilenceAfterSpeech;
+
+                // Bound memory for long sessions: audio at or before the
+                // confirmed boundary is never decoded again, so drop it. Only
+                // when no worker is running, so the boundary cannot move under
+                // the trim.
+                if !pipeline.is_pending() {
+                    let confirmed = *confirmed_chunks.lock();
+                    if confirmed >= lag_chunks.max(8) {
+                        recorded_audio.drain(0..confirmed);
+                        *confirmed_chunks.lock() = 0;
+                        tracing::trace!(dropped = confirmed, "Trimmed committed audio");
+                    }
+                }
 
                 use VadState::*;
                 match vad_state {
