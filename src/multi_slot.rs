@@ -30,6 +30,13 @@ pub trait MultiSlotHandler: Send + Sync {
         Vec::new()
     }
 
+    /// Environment variables for sending to the currently focused destination
+    /// window, if the handler can resolve one. `None` means there is no focused
+    /// destination, so callers fall back to [`Self::active_slots`].
+    fn focused_window_env_vars(&self) -> Option<Vec<(String, String)>> {
+        None
+    }
+
     /// Return whether output for `slot_num` can reach a destination.
     fn has_target(&self, slot_num: usize) -> bool {
         let _ = slot_num;

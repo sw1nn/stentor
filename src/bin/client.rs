@@ -15,8 +15,9 @@ enum ClientCommand {
     },
     /// Stop recording and finalize transcription
     TranscribeEnd {
-        /// Destination slot for transcription (0 = default output, 1-4 = specific slots).
-        /// Without this option, send to all active slots in kitty mode, else to slot 0.
+        /// Destination slot for transcription (0 = default output, 1-8 = specific slots).
+        /// Without this option, send to the focused kitty window when the kitty handler
+        /// is active, else to slot 0.
         #[arg(long)]
         slot: Option<usize>,
     },
@@ -98,7 +99,7 @@ impl StartArgs {
   # Start recording with Kitty multi-slot handler
   stentorctl transcribe --multi-slot-handler=kitty
 
-  # Stop and auto-send to all active slots (kitty mode) or default output
+  # Stop and auto-send to the focused kitty window (kitty mode) or default output
   stentorctl transcribe-end
 
   # Stop and auto-send to slot 1

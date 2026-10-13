@@ -132,7 +132,8 @@ pub async fn run(
     // Keep Arc<Mutex<>> for stop_tx since it's shared with background threads
     let current_stop_tx: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>> =
         Arc::new(Mutex::new(None));
-    // Command slots to send to when Stop is called; None = default target (all active slots, or slot 0)
+    // Command slots to send to when Stop is called; None = default target (the
+    // focused kitty window, else all active slots, or slot 0)
     let auto_send_slots: Arc<Mutex<Vec<Option<usize>>>> = Arc::new(Mutex::new(Vec::new()));
     // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
     let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
@@ -338,7 +339,26 @@ pub async fn run(
                                     AutoSendText(text, target) => {
                                         tracing::debug!(?target, text = %text, "AutoSendText received");
 
-                                        // Match Alt+Enter in the dialog: no explicit slot means all
+                                        // No explicit slot targets the focused kitty
+                                        // window, even when it is not a stentor slot.
+                                        if target.is_none()
+                                            && let Some(env_vars) = handler_for_close
+                                                .as_ref()
+                                                .and_then(|h| h.focused_window_env_vars())
+                                        {
+                                            tracing::info!(?env_vars, "Sending to the focused kitty window");
+                                            let cmd_str = output_command_for_auto_send.clone();
+                                            std::thread::spawn(move || {
+                                                if let Some(ref cmd) = cmd_str {
+                                                    execute_output_command(cmd, &text, 0, &env_vars);
+                                                } else {
+                                                    tracing::warn!("No output command configured for sending text");
+                                                }
+                                            });
+                                            continue;
+                                        }
+
+                                        // An explicit slot, or no focused window: all
                                         // active slots, or the default output when there are none.
                                         let slots = match target {
                                             Some(slot) => vec![slot],

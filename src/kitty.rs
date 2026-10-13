@@ -377,6 +377,32 @@ pub fn find_stentor_windows(data: &Value, matchers: &[SlotMatcher]) -> Vec<Claud
     result
 }
 
+/// Find the first element whose boolean `flag` is true.
+fn find_flag<'a>(items: &'a [Value], flag: &str) -> Option<&'a Value> {
+    items
+        .iter()
+        .find(|item| item.get(flag).and_then(Value::as_bool).unwrap_or(false))
+}
+
+/// Return the id of the focused kitty window by walking the `ls` tree: the OS
+/// window with `is_focused`, its active tab, and its active window. Falls back
+/// to `last_focused` so text still lands in the window the user last used when
+/// no OS window has focus.
+pub fn focused_window_id(data: &Value) -> Option<u64> {
+    let os_windows = data.as_array()?;
+
+    let os_window =
+        find_flag(os_windows, "is_focused").or_else(|| find_flag(os_windows, "last_focused"))?;
+
+    let tabs = os_window.get("tabs")?.as_array()?;
+    let tab = find_flag(tabs, "is_active").or_else(|| tabs.first())?;
+
+    let windows = tab.get("windows")?.as_array()?;
+    let window = find_flag(windows, "is_active").or_else(|| windows.first())?;
+
+    window.get("id")?.as_u64()
+}
+
 /// Find the next available STENTOR_SLOT (1-8)
 /// Returns None if all slots are occupied
 pub fn find_available_slot() -> Result<Option<usize>> {
@@ -1091,6 +1117,24 @@ impl MultiSlotHandler for KittyMultiSlotHandler {
         slots
     }
 
+    fn focused_window_env_vars(&self) -> Option<Vec<(String, String)>> {
+        let data = match list_kitty_windows() {
+            Ok(data) => data,
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to list kitty windows for focus lookup");
+                return None;
+            }
+        };
+        let window_id = focused_window_id(&data)?;
+
+        let mut vars = Vec::new();
+        if let Ok(socket_path) = get_kitty_listen_on() {
+            vars.push(("KITTY_LISTEN_ON".to_string(), socket_path));
+        }
+        vars.push(("WINDOW_ID".to_string(), window_id.to_string()));
+        Some(vars)
+    }
+
     fn has_target(&self, slot_num: usize) -> bool {
         self.slot_window_ids.lock().contains_key(&slot_num)
     }
@@ -1111,6 +1155,63 @@ mod tests {
     fn test_dcs_frame_end_incomplete() {
         assert_eq!(dcs_frame_end(b"abc"), None);
         assert_eq!(dcs_frame_end(b"abc\x1b"), None);
+    }
+
+    #[test]
+    fn test_focused_window_id_prefers_focused_os_window() {
+        let data = json!([
+            {
+                "id": 10,
+                "is_focused": false,
+                "last_focused": false,
+                "tabs": [{ "is_active": true, "windows": [{ "id": 11, "is_active": true }] }]
+            },
+            {
+                "id": 20,
+                "is_focused": true,
+                "tabs": [{
+                    "is_active": true,
+                    "windows": [
+                        { "id": 21, "is_active": false },
+                        { "id": 22, "is_active": true }
+                    ]
+                }]
+            }
+        ]);
+        assert_eq!(focused_window_id(&data), Some(22));
+    }
+
+    #[test]
+    fn test_focused_window_id_falls_back_to_last_focused() {
+        let data = json!([{
+            "id": 10,
+            "is_focused": false,
+            "last_focused": true,
+            "tabs": [{ "is_active": true, "windows": [{ "id": 11, "is_active": true }] }]
+        }]);
+        assert_eq!(focused_window_id(&data), Some(11));
+    }
+
+    #[test]
+    fn test_focused_window_id_uses_active_tab() {
+        let data = json!([{
+            "id": 10,
+            "is_focused": true,
+            "tabs": [
+                { "is_active": false, "windows": [{ "id": 11, "is_active": true }] },
+                { "is_active": true, "windows": [{ "id": 12, "is_active": true }] }
+            ]
+        }]);
+        assert_eq!(focused_window_id(&data), Some(12));
+    }
+
+    #[test]
+    fn test_focused_window_id_none_without_focus() {
+        assert_eq!(focused_window_id(&json!([])), None);
+        assert_eq!(
+            focused_window_id(&json!([{ "id": 1, "is_focused": false, "tabs": [] }])),
+            None
+        );
     }
 
     #[test]

@@ -141,7 +141,7 @@ stentorctl transcribe --source="USB Condenser Microphone"
 # Start recording with Kitty multi-slot handler
 stentorctl transcribe --multi-slot-handler=kitty
 
-# Stop recording and auto-send to the default target
+# Stop recording and auto-send to the focused kitty window (kitty mode), else default output
 stentorctl transcribe-end
 
 # Stop recording and auto-send to slot 1
