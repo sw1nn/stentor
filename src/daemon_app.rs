@@ -11,14 +11,17 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use tokio::sync::mpsc as tokio_mpsc;
 
-use crate::audio::{AudioRecorder, RecordingCommand};
+use crate::audio::RecordingCommand;
 use crate::config::{Config, ConfigFile};
 use crate::daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
 use crate::defaults;
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler as MultiSlotHandlerTrait};
-use crate::recording::{UIMessage, execute_output_command, start_recording_session};
+use crate::pulse::PulseManager;
+use crate::recording::{
+    RecordingSession, UIMessage, execute_output_command, start_recording_session,
+};
 use crate::transcription::Transcriber;
 
 /// Show a desktop notification so text sent to a slot without a window is not silently lost.
@@ -97,6 +100,9 @@ pub async fn run(
     let config_clone = Arc::clone(&config);
     let config_file_clone = Arc::clone(&config_file);
     let transcriber_clone = Arc::clone(&transcriber);
+    // Supervised PulseAudio connection, kept for the daemon's lifetime. Only a
+    // context is held; no record stream is open between sessions.
+    let pulse = PulseManager::spawn();
 
     // Setup GTK event loop integration with tokio
     glib::MainContext::default().spawn_local(async move {
@@ -144,15 +150,10 @@ pub async fn run(
                         // capture.
                         {
                             let ui_tx = ui_tx.clone();
+                            let pulse = Arc::clone(&pulse);
                             let source = source.clone();
-                            let chunk_size = config_clone.chunk_size;
                             thread::spawn(move || {
-                                let name = match AudioRecorder::new(16000, source, chunk_size) {
-                                    Ok(recorder) => recorder
-                                        .get_device_name()
-                                        .unwrap_or_else(|_| "Default".to_string()),
-                                    Err(_) => "Default".to_string(),
-                                };
+                                let name = pulse.device_name(source.as_deref());
                                 let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo(name));
                             });
                         }
@@ -478,6 +479,7 @@ pub async fn run(
                         // Start recording in background
                         let config_clone = Arc::clone(&config_clone);
                         let transcriber_clone = Arc::clone(&transcriber_clone);
+                        let pulse_for_recording = Arc::clone(&pulse);
                         let ui_tx_for_recording = ui_tx.clone();
                         let ui_tx_for_recording_error = ui_tx_for_recording.clone();
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
@@ -488,13 +490,16 @@ pub async fn run(
 
                         thread::spawn(move || {
                             match start_recording_session(
-                                config_clone,
-                                transcriber_clone,
-                                ui_tx_for_recording,
-                                stop_tx_storage.clone(),
+                                RecordingSession {
+                                    config: config_clone,
+                                    transcriber: transcriber_clone,
+                                    pulse: pulse_for_recording,
+                                    ui_tx: ui_tx_for_recording,
+                                    stop_tx_storage: stop_tx_storage.clone(),
+                                    auto_send_slots: auto_send_for_recording.clone(),
+                                },
                                 unmute_source,
                                 source,
-                                auto_send_for_recording.clone(),
                             ) {
                                 Ok(_) => {
                                     tracing::info!("Recording session completed");

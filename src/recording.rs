@@ -136,6 +136,7 @@ use crate::audio::{AudioChunk, AudioRecorder, RecordingCommand, VadState, VoiceA
 use crate::config::Config;
 use crate::defaults;
 use crate::dialog::TranscriptionState;
+use crate::pulse::PulseManager;
 use crate::source_mute::SourceMuteManager;
 use crate::transcription::Transcriber;
 
@@ -159,20 +160,35 @@ pub enum UIMessage {
     Close,
 }
 
+/// Shared services and state needed to run one recording session.
+pub struct RecordingSession {
+    pub config: Arc<Config>,
+    pub transcriber: Arc<Transcriber>,
+    pub pulse: Arc<PulseManager>,
+    pub ui_tx: Sender<UIMessage>,
+    pub stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
+    pub auto_send_slots: Arc<Mutex<Vec<Option<usize>>>>,
+}
+
 pub fn start_recording_session(
-    config: Arc<Config>,
-    transcriber: Arc<Transcriber>,
-    ui_tx: Sender<UIMessage>,
-    stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
+    session: RecordingSession,
     unmute_source: bool,
     source: Option<String>,
-    auto_send_slots: Arc<Mutex<Vec<Option<usize>>>>,
 ) -> Result<()> {
+    let RecordingSession {
+        config,
+        transcriber,
+        pulse,
+        ui_tx,
+        stop_tx_storage,
+        auto_send_slots,
+    } = session;
+
     tracing::info!("Starting recording session");
 
     // Unmute source if requested
     let _source_manager = if unmute_source {
-        match SourceMuteManager::unmute_if_needed() {
+        match SourceMuteManager::unmute_if_needed(Arc::clone(&pulse)) {
             Ok(manager) => Some(manager),
             Err(e) => {
                 tracing::warn!(
