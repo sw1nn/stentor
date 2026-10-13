@@ -179,11 +179,18 @@ stentorctl quit
 | Shortcut | Action |
 |----------|--------|
 | `Escape` | Cancel and close dialog |
+| `F2` | Toggle hold: review on end instead of sending |
 | `Alt+Enter` | Send to all active destinations |
 | `Alt+1` - `Alt+8` | Send to specific slot |
 | `Alt+0` | Send to default output (slot 0) |
 
 During recording, shortcuts stop recording and auto-send. During review, they send the edited text.
+
+`F2` toggles "review on release" for the current session. It is useful with a
+foot switch: the release normally sends the text, but with the toggle armed the
+text stays in the dialog for review, so you can edit it or pick a different
+destination. An explicit `transcribe-end --slot=N` always sends. The toggle
+resets at the start of each recording.
 
 ### Push-to-Talk (Foot Pedal)
 
@@ -197,9 +204,9 @@ the press timing, so a daemon restart cannot leave a stale latch behind.
   stops and sends.
 
 Silence does not end a push-to-talk session; only a release, a second press, or
-an explicit stop does. The transcript is auto-sent on this path, so there is no
-review step. Use `transcribe` / `transcribe-end` for the hands-free workflow
-with silence auto-stop and review.
+an explicit stop does. The transcript is auto-sent on this path unless
+review-on-release is armed with F2. Use `transcribe` / `transcribe-end` for the
+hands-free workflow with silence auto-stop and review.
 
 Bind both edges of the pedal key. For Hyprland:
 

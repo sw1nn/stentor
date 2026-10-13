@@ -53,6 +53,39 @@ fn stop_and_send(
     true
 }
 
+/// Stop the active session without queueing an auto-send target.
+fn stop_session(
+    stop_tx_storage: &Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>,
+) -> bool {
+    let stop_tx_lock = stop_tx_storage.lock();
+    let Some(tx) = stop_tx_lock.as_ref() else {
+        return false;
+    };
+    let _ = tx.send(RecordingCommand::Stop);
+    true
+}
+
+/// Stop a push-to-talk session, honouring review-on-release.
+///
+/// F2 arms the hold; with it armed the transcript stays in the dialog for
+/// editing instead of being sent.
+fn stop_ptt_session(
+    stop_tx_storage: &Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>,
+    auto_send_slots: &Mutex<Vec<Option<usize>>>,
+    dialog: &RefCell<Option<TranscriptionDialog>>,
+) -> bool {
+    let held = dialog
+        .borrow()
+        .as_ref()
+        .is_some_and(|dialog| dialog.hold_on_stop());
+    if held {
+        tracing::info!("Held for review: skipping auto-send");
+        stop_session(stop_tx_storage)
+    } else {
+        stop_and_send(stop_tx_storage, auto_send_slots, None)
+    }
+}
+
 /// The kind of session that is running, if any.
 fn active_session(
     recording_active: &AtomicBool,
@@ -178,10 +211,10 @@ pub async fn run(
                                     reason = "latch_closed",
                                     "Stopping push-to-talk session"
                                 );
-                                if !stop_and_send(
+                                if !stop_ptt_session(
                                     &current_stop_tx_clone,
                                     &auto_send_slots_clone,
-                                    None,
+                                    &current_dialog_clone,
                                 ) {
                                     tracing::warn!("Latch close ignored: session already finished");
                                 }
@@ -226,6 +259,11 @@ pub async fn run(
                         let dialog = dialog_ref.as_mut().expect("Dialog should always exist");
                         dialog.reset();
                     }
+
+                    // Drop any auto-send target left over from a previous session
+                    // (for example a stop that arrived after recording had already
+                    // finalised) so it cannot dispatch the new session's text.
+                    auto_send_slots_clone.lock().clear();
 
                         // Create UI update channel with backpressure
                         // Bounded to prevent OOM if UI thread blocks
@@ -637,11 +675,23 @@ pub async fn run(
                         });
                 }
                 Stop { command_slot } => {
-                    if !stop_and_send(
-                        &current_stop_tx_clone,
-                        &auto_send_slots_clone,
-                        command_slot,
-                    ) {
+                    // F2 in the dialog holds the text back for review. Only a
+                    // plain stop (no explicit slot) honours the hold; an explicit
+                    // --slot always sends.
+                    let held = command_slot.is_none()
+                        && current_dialog_clone
+                            .borrow()
+                            .as_ref()
+                            .is_some_and(|dialog| dialog.hold_on_stop());
+
+                    let accepted = if held {
+                        tracing::info!("Held for review: skipping auto-send");
+                        stop_session(&current_stop_tx_clone)
+                    } else {
+                        stop_and_send(&current_stop_tx_clone, &auto_send_slots_clone, command_slot)
+                    };
+
+                    if !accepted {
                         tracing::debug!("Stop ignored: no active recording session");
                     }
                 }
@@ -653,7 +703,11 @@ pub async fn run(
                             reason = "hold_released",
                             "Stopping push-to-talk session"
                         );
-                        if !stop_and_send(&current_stop_tx_clone, &auto_send_slots_clone, None) {
+                        if !stop_ptt_session(
+                            &current_stop_tx_clone,
+                            &auto_send_slots_clone,
+                            &current_dialog_clone,
+                        ) {
                             tracing::warn!("Push-to-talk release ignored: session already finished");
                         }
                     } else {

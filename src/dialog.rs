@@ -6,6 +6,7 @@ use gtk4::{
 use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use parking_lot::Mutex;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Helper function to send transcription to all active slots
 fn handle_send_to_all(
@@ -91,6 +92,15 @@ fn handle_send_to_slot(
     }
 }
 
+/// Markup for the F2 hold-for-review hint, amber when armed.
+fn hold_markup(held: bool) -> &'static str {
+    if held {
+        "<small><span foreground='#d4a017'>• review on release (F2)</span></small>"
+    } else {
+        "<small><span foreground='#888888'>• F2: review on release</span></small>"
+    }
+}
+
 fn slot_unicode_char(slot_num: usize) -> char {
     match slot_num {
         1 => '\u{F03A5}', // 󰎥
@@ -149,6 +159,7 @@ pub struct TranscriptionDialog {
     state: Arc<Mutex<TranscriptionState>>,
     spinner: Spinner,
     status_label: Label,
+    hold_label: Label,
     mic_label: Label,
     level_bar: LevelBar,
     text_view: TextView,
@@ -157,6 +168,9 @@ pub struct TranscriptionDialog {
     destination_buttons: Vec<Button>,
     destination_box: Box,
     destinations: Arc<Mutex<Vec<DestinationSlot>>>,
+    /// When true, ending the transcription holds the text for review instead of
+    /// sending it. Toggled with F2 and read by the daemon on stop.
+    hold_on_stop: Arc<AtomicBool>,
 
     // Callbacks
     on_manual_stop: Option<Arc<dyn Fn() + Send + Sync>>,
@@ -273,6 +287,12 @@ impl TranscriptionDialog {
         status_label.set_xalign(0.0); // Left align
         status_box.append(&status_label);
 
+        // Hold-for-review hint (shown while recording, amber when armed)
+        let hold_label = Label::new(None);
+        hold_label.set_xalign(0.0);
+        hold_label.set_visible(false);
+        status_box.append(&hold_label);
+
         // Microphone info label (right-aligned in status bar)
         let mic_label = Label::new(None);
         mic_label
@@ -290,6 +310,7 @@ impl TranscriptionDialog {
             state: Arc::new(Mutex::new(TranscriptionState::Idle)),
             spinner,
             status_label,
+            hold_label,
             mic_label,
             level_bar,
             text_view,
@@ -298,6 +319,7 @@ impl TranscriptionDialog {
             destination_buttons,
             destination_box,
             destinations: Arc::new(Mutex::new(Vec::new())),
+            hold_on_stop: Arc::new(AtomicBool::new(false)),
             on_manual_stop: None,
             on_send_text: None,
             on_cancel: None,
@@ -508,6 +530,18 @@ impl TranscriptionDialog {
         self.on_stop_and_send = Some(Arc::new(callback));
     }
 
+    /// Whether ending the transcription should hold the text for review
+    /// instead of sending it.
+    pub fn hold_on_stop(&self) -> bool {
+        self.hold_on_stop.load(Ordering::Acquire)
+    }
+
+    fn refresh_hold_label(&self) {
+        self.hold_label.set_markup(hold_markup(self.hold_on_stop()));
+        let recording = matches!(*self.state.lock(), TranscriptionState::Recording);
+        self.hold_label.set_visible(recording);
+    }
+
     pub fn setup_key_handlers(&self) {
         let state = Arc::clone(&self.state);
         let on_manual_stop = self.on_manual_stop.clone();
@@ -519,10 +553,21 @@ impl TranscriptionDialog {
         let text_view = self.text_view.clone();
         let window = self.window.clone();
         let destinations = Arc::clone(&self.destinations);
+        let hold_on_stop = Arc::clone(&self.hold_on_stop);
+        let hold_label = self.hold_label.clone();
 
         let key_controller = gtk4::EventControllerKey::new();
         key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
             let current_state = *state.lock();
+
+            // F2 toggles holding the text for review instead of sending on end
+            if keyval == gdk::Key::F2 && current_state == TranscriptionState::Recording {
+                let held = !hold_on_stop.load(Ordering::Acquire);
+                hold_on_stop.store(held, Ordering::Release);
+                hold_label.set_markup(hold_markup(held));
+                tracing::info!(held, "Toggled review-on-release");
+                return glib::Propagation::Stop;
+            }
 
             // Escape key handling
             if keyval == gdk::Key::Escape {
@@ -618,10 +663,21 @@ impl TranscriptionDialog {
         let on_cancel = self.on_cancel.clone();
         let text_view_clone = self.text_view.clone();
         let destinations_clone = Arc::clone(&self.destinations);
+        let hold_on_stop = Arc::clone(&self.hold_on_stop);
+        let hold_label = self.hold_label.clone();
 
         let text_key_controller = gtk4::EventControllerKey::new();
         text_key_controller.connect_key_pressed(move |_controller, keyval, _keycode, modifiers| {
             let current_state = *state.lock();
+
+            // F2 toggles holding the text for review instead of sending on end
+            if keyval == gdk::Key::F2 && current_state == TranscriptionState::Recording {
+                let held = !hold_on_stop.load(Ordering::Acquire);
+                hold_on_stop.store(held, Ordering::Release);
+                hold_label.set_markup(hold_markup(held));
+                tracing::info!(held, "Toggled review-on-release");
+                return glib::Propagation::Stop;
+            }
 
             // Escape key handling in text view
             if keyval == gdk::Key::Escape {
@@ -767,6 +823,7 @@ impl TranscriptionDialog {
 
     pub fn update_state(&self, state: TranscriptionState, message: &str, level: f64) {
         *self.state.lock() = state;
+        self.refresh_hold_label();
 
         use TranscriptionState::*;
         match state {
@@ -887,6 +944,7 @@ impl TranscriptionDialog {
         // Reset transcription state
         *self.state.lock() = TranscriptionState::Idle;
         *self.destinations.lock() = Vec::new();
+        self.hold_on_stop.store(false, Ordering::Release);
 
         // Clear text content
         self.text_view.buffer().set_text("");
@@ -896,6 +954,7 @@ impl TranscriptionDialog {
         self.spinner.stop();
         self.status_label
             .set_markup("<small>Waiting for speech...</small>");
+        self.hold_label.set_visible(false);
         self.level_bar.set_value(0.0);
         self.level_bar.set_visible(true);
         self.text_preview.set_visible(false);
