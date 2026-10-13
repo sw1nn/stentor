@@ -94,6 +94,11 @@ pub const TRANSCRIPTION_WINDOW: f32 = 5.0;
 /// Default delay before audio is confirmed (seconds).
 pub const TRANSCRIPTION_LAG: f32 = 1.0;
 
+/// Pre-roll buffer duration (seconds). Recent audio is kept so that a soft
+/// speech onset is not clipped when the VAD first detects speech. Set to 0 to
+/// disable.
+pub const PRE_ROLL_DURATION: f32 = 0.3;
+
 /// Default Unix socket filename.
 pub const SOCKET_NAME: &str = "stentor.sock";
 

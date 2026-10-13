@@ -128,6 +128,7 @@
 use anyhow::Result;
 use async_channel::Sender;
 use parking_lot::Mutex;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::thread;
 
@@ -249,6 +250,19 @@ pub fn start_recording_session(
     let lag_chunks =
         (config.transcription_lag * actual_sample_rate as f32 / config.chunk_size as f32) as usize;
 
+    // Pre-roll: keep the most recent few chunks of audio so that a soft speech
+    // onset (a plosive or fricative sits below the RMS threshold) is not
+    // clipped when the VAD first fires. This only buffers audio captured during
+    // this session; no stream is held between sessions.
+    let pre_roll_chunks = if defaults::PRE_ROLL_DURATION > 0.0 {
+        ((defaults::PRE_ROLL_DURATION * actual_sample_rate as f32 / config.chunk_size as f32).ceil()
+            as usize)
+            .max(1)
+    } else {
+        0
+    };
+    let mut pre_roll: VecDeque<Vec<f32>> = VecDeque::with_capacity(pre_roll_chunks + 1);
+
     // Track confirmed text and how many chunks have been confirmed
     let confirmed_text = Arc::new(Mutex::new(String::new()));
     let confirmed_chunks = Arc::new(Mutex::new(0usize));
@@ -299,6 +313,15 @@ pub fn start_recording_session(
                         silence_chunks = 0;
                         speech_chunks += 1;
                         chunks_since_last_transcription += 1;
+
+                        // On the first speech chunk, prepend the buffered
+                        // pre-onset audio so the start of the utterance is kept.
+                        if previous_vad_state == Idle && !pre_roll.is_empty() {
+                            let buffered = pre_roll.len();
+                            recorded_audio.extend(pre_roll.drain(..));
+                            tracing::debug!(buffered, "Prepended pre-roll audio at speech onset");
+                        }
+
                         recorded_audio.push(chunk.data);
 
                         // Switch to transcription mode once speech starts
@@ -573,6 +596,14 @@ pub fn start_recording_session(
                         }
                     }
                     Idle => {
+                        // Keep recent audio so a soft speech onset is not lost.
+                        if pre_roll_chunks > 0 {
+                            pre_roll.push_back(chunk.data);
+                            while pre_roll.len() > pre_roll_chunks {
+                                pre_roll.pop_front();
+                            }
+                        }
+
                         // Still waiting for speech
                         let _ = ui_tx.send_blocking(UIMessage::UpdateState(
                             TranscriptionState::Recording,
