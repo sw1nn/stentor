@@ -25,6 +25,30 @@ fn thread_count() -> i32 {
         .unwrap_or(4)
 }
 
+/// One transcribed segment, with its end time relative to the audio passed in.
+pub struct TranscribedSegment {
+    /// End time in centiseconds (10 ms).
+    pub end_cs: i64,
+    pub text: String,
+}
+
+/// Encoder-context sizes (in encoder frames) used to bound the number of
+/// distinct GPU compute graphs. Each bucket covers `bucket * 320` samples.
+const AUDIO_CTX_BUCKETS: [i32; 4] = [256, 512, 1024, 1500];
+
+/// Smallest encoder-context bucket that covers `samples` samples.
+///
+/// The mel has one frame per 160 samples and the encoder consumes two frames
+/// per context position, so covering `samples` needs `samples / 320`.
+fn audio_ctx_for_samples(samples: usize) -> i32 {
+    let needed = samples.div_ceil(320) as i32 + 1;
+    AUDIO_CTX_BUCKETS
+        .iter()
+        .copied()
+        .find(|bucket| *bucket >= needed)
+        .unwrap_or(1500)
+}
+
 impl Transcriber {
     /// Create a new transcriber with the specified model
     ///
@@ -191,10 +215,21 @@ impl Transcriber {
         Ok(())
     }
 
-    /// Transcribe audio data
+    /// Transcribe audio and return the segments with their end times.
     ///
-    /// Audio should be mono, 16kHz sample rate, f32 format
-    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
+    /// Audio should be mono, 16 kHz, f32. `prompt` conditions the decode on
+    /// previous text. When `limit_audio_ctx` is set, the encoder context is
+    /// scaled to the audio length, which is faster for short clips.
+    pub fn transcribe_segments(
+        &self,
+        audio_data: &[f32],
+        prompt: Option<&str>,
+        limit_audio_ctx: bool,
+    ) -> Result<Vec<TranscribedSegment>> {
+        if audio_data.is_empty() {
+            return Ok(Vec::new());
+        }
+
         let mut state = self.state.lock();
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
@@ -210,6 +245,14 @@ impl Transcriber {
         // Suppress non-speech tokens, which reduces hallucination on noise.
         params.set_suppress_nst(true);
 
+        if let Some(prompt) = prompt.filter(|p| !p.is_empty()) {
+            params.set_initial_prompt(prompt);
+        }
+
+        if limit_audio_ctx {
+            params.set_audio_ctx(audio_ctx_for_samples(audio_data.len()));
+        }
+
         params.set_print_special(false);
         params.set_print_progress(false);
         params.set_print_realtime(false);
@@ -220,28 +263,48 @@ impl Transcriber {
             .context("Failed to transcribe audio")?;
 
         let num_segments = state.full_n_segments();
-
-        let mut text = String::new();
+        let mut segments = Vec::with_capacity(num_segments.max(0) as usize);
         for i in 0..num_segments {
             if let Some(segment) = state.get_segment(i)
                 && let Ok(segment_text) = segment.to_str_lossy()
             {
-                text.push_str(&segment_text);
+                segments.push(TranscribedSegment {
+                    end_cs: segment.end_timestamp(),
+                    text: segment_text.into_owned(),
+                });
             }
         }
 
+        Ok(segments)
+    }
+
+    /// Transcribe audio data and return the full text.
+    ///
+    /// Audio should be mono, 16kHz sample rate, f32 format
+    pub fn transcribe(&self, audio_data: &[f32]) -> Result<String> {
+        let segments = self.transcribe_segments(audio_data, None, false)?;
+        let text: String = segments
+            .iter()
+            .map(|segment| segment.text.as_str())
+            .collect();
         Ok(text.trim().to_string())
     }
 
-    /// Run one discarded transcription so the first real dictation does not pay
+    /// Run discarded transcriptions so the first real dictation does not pay
     /// for GPU graph compilation and buffer allocation.
     pub fn warm_up(&self) {
-        let silence = vec![0.0f32; 16_000];
-        if let Err(e) = self.transcribe(&silence) {
-            tracing::debug!(error = %e, "Whisper warm-up failed (non-fatal)");
-        } else {
-            tracing::info!("Whisper warm-up complete");
+        // The unconstrained graph, used by the final transcriptions. This also
+        // compiles the largest encoder-context bucket.
+        let _ = self.transcribe_segments(&vec![0.0f32; 16_000], None, false);
+
+        // The smaller encoder-context buckets used by live previews. Pass just
+        // enough audio to select each bucket: the encoder processes the full
+        // bucket-sized graph either way, so this bounds the wasted work.
+        for samples in [1_600usize, 256 * 320 + 1_600, 512 * 320 + 1_600] {
+            let _ = self.transcribe_segments(&vec![0.0f32; samples], None, true);
         }
+
+        tracing::info!("Whisper warm-up complete");
     }
 }
 
@@ -262,5 +325,27 @@ mod tests {
         let result = Transcriber::get_model_path("tiny");
         // Just check that the function runs without panicking
         let _ = result;
+    }
+
+    #[test]
+    fn test_audio_ctx_bucket_selection() {
+        assert_eq!(audio_ctx_for_samples(1_000), 256);
+        assert_eq!(audio_ctx_for_samples(6 * 16_000), 512);
+        assert_eq!(audio_ctx_for_samples(15 * 16_000), 1024);
+        assert_eq!(audio_ctx_for_samples(28 * 16_000), 1500);
+    }
+
+    #[test]
+    fn test_audio_ctx_covers_supported_audio() {
+        // Every supported tail length must fit inside its bucket; a bucket that
+        // is too small would truncate the audio.
+        for seconds in [0.5f64, 2.0, 5.0, 10.0, 15.0, 20.0, 28.0] {
+            let samples = (seconds * 16_000.0) as usize;
+            let context = audio_ctx_for_samples(samples);
+            assert!(
+                context as usize * 320 >= samples,
+                "context {context} too small for {seconds}s ({samples} samples)"
+            );
+        }
     }
 }
