@@ -78,6 +78,7 @@ pub fn parse_slot_matchers(patterns: &[String]) -> Vec<SlotMatcher> {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ConfigFile {
     #[serde(default)]
     pub daemon: Config,
@@ -88,6 +89,7 @@ pub struct ConfigFile {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KittyConfig {
     #[serde(default, alias = "background-color-cmd")]
     pub background_color_cmd: Option<String>,
@@ -137,6 +139,7 @@ fn default_slot_id_font() -> String {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 pub struct ClientConfig {
     #[serde(default)]
     pub source: Option<String>,
@@ -146,6 +149,7 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_model")]
     pub model: String,
@@ -583,5 +587,36 @@ mod tests {
         assert_eq!(kitty_config.slot_matches.len(), 2);
         assert_eq!(kitty_config.slot_matches[0], "cmd:claude");
         assert_eq!(kitty_config.slot_matches[1], "hypr-title:Test.*");
+    }
+
+    #[test]
+    fn test_unknown_daemon_field_is_rejected() {
+        let toml_str = r#"
+            [daemon]
+            model = "base"
+            unmute-source = true
+        "#;
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "unknown field should be rejected");
+    }
+
+    #[test]
+    fn test_unknown_section_is_rejected() {
+        let toml_str = r#"
+            [daemon]
+            model = "base"
+
+            [unknown]
+            foo = 1
+        "#;
+        let result: std::result::Result<ConfigFile, _> = toml::from_str(toml_str);
+        assert!(result.is_err(), "unknown section should be rejected");
+    }
+
+    #[test]
+    fn test_sample_config_parses() -> Result<()> {
+        let config_file: ConfigFile = toml::from_str(include_str!("../config.toml.sample"))?;
+        assert_eq!(config_file.daemon.model, "base");
+        Ok(())
     }
 }
