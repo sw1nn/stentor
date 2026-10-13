@@ -2,6 +2,21 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.36.0 - 2026-10-13
+#### Features
+- (**transcription**) verify model downloads against the published checksum - (6de788e) - Neale Swinnerton
+#### Bug Fixes
+- (**transcription**) harden model downloads and use the XDG model directory - (f7029ca) - Neale Swinnerton
+#### Performance Improvements
+- (**recording**) throttle level-bar updates to 10 Hz - (955273e) - Neale Swinnerton
+- (**recording**) bound session memory by dropping committed audio - (2bfb642) - Neale Swinnerton
+- (**transcription**) decode segments with a scaled encoder context - (b82d0a2) - Neale Swinnerton
+- (**transcription**) warm up the decoder, reuse its state and tune it - (e280698) - Neale Swinnerton
+#### Refactoring
+- (**recording**) commit transcriptions on whisper segment boundaries - (fcc84f2) - Neale Swinnerton
+
+- - -
+
 ## v0.35.0 - 2026-10-13
 #### Features
 - (**audio**) supervise a long-lived PulseAudio context - (121dfe4) - Neale Swinnerton
