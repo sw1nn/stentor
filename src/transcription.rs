@@ -49,6 +49,68 @@ fn audio_ctx_for_samples(samples: usize) -> i32 {
         .unwrap_or(1500)
 }
 
+/// Preferred directory for Whisper models (`$XDG_DATA_HOME/whisper`).
+fn model_dir() -> Result<PathBuf> {
+    match xdg::BaseDirectories::new().get_data_home() {
+        Some(data_home) => Ok(data_home.join("whisper")),
+        None => Ok(
+            PathBuf::from(std::env::var("HOME").context("HOME is not set")?)
+                .join(".local/share/whisper"),
+        ),
+    }
+}
+
+/// Locations used by earlier versions, still searched for existing models.
+fn legacy_model_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(data_home) = xdg::BaseDirectories::new().get_data_home()
+        && let Some(parent) = data_home.parent()
+    {
+        dirs.push(parent.join("whisper"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let legacy = PathBuf::from(home).join(".local/whisper");
+        if !dirs.contains(&legacy) {
+            dirs.push(legacy);
+        }
+    }
+    dirs
+}
+
+/// Stream `reader` into `path`, updating `progress`.
+fn stream_to_file<R>(mut reader: R, path: &Path, progress: &ProgressBar) -> Result<()>
+where
+    R: io::Read,
+{
+    let file = fs::File::create(path)
+        .with_context(|| format!("Failed to create file: {}", path.display()))?;
+
+    struct ProgressWriter<W: Write> {
+        writer: W,
+        progress_bar: ProgressBar,
+    }
+
+    impl<W: Write> Write for ProgressWriter<W> {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let written = self.writer.write(buf)?;
+            self.progress_bar.inc(written as u64);
+            Ok(written)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.writer.flush()
+        }
+    }
+
+    let mut writer = ProgressWriter {
+        writer: file,
+        progress_bar: progress.clone(),
+    };
+
+    io::copy(&mut reader, &mut writer).context("Failed to write response to file")?;
+    Ok(())
+}
+
 impl Transcriber {
     /// Create a new transcriber with the specified model
     ///
@@ -90,127 +152,99 @@ impl Transcriber {
         })
     }
 
-    /// Get the path to the Whisper model file, downloading if necessary
+    /// Get the path to the Whisper model file, downloading if necessary.
+    ///
+    /// Models live in the XDG data directory (`$XDG_DATA_HOME/whisper`). A
+    /// legacy location (`~/.local/whisper`) and the current directory are also
+    /// searched, so existing installations keep working.
     fn get_model_path(model_size: &str) -> Result<PathBuf> {
-        // Determine the target directory for models
-        let xdg_dirs = xdg::BaseDirectories::new();
-        let model_dir = if let Some(data_home) = xdg_dirs.get_data_home() {
-            if let Some(parent) = data_home.parent() {
-                parent.join("whisper")
-            } else {
-                PathBuf::from(std::env::var("HOME")?)
-                    .join(".local")
-                    .join("share")
-                    .join("whisper")
-            }
-        } else {
-            PathBuf::from(std::env::var("HOME")?)
-                .join(".local")
-                .join("share")
-                .join("whisper")
-        };
+        let file_name = format!("ggml-{model_size}.bin");
 
-        let model_path = model_dir.join(format!("ggml-{}.bin", model_size));
-
-        // If model exists, return it
+        // Preferred location, and where a missing model is downloaded to.
+        let model_path = model_dir()?.join(&file_name);
         if model_path.exists() {
             return Ok(model_path);
         }
 
-        // Try current directory as fallback
-        let local_model_path = PathBuf::from(format!("ggml-{}.bin", model_size));
+        for dir in legacy_model_dirs() {
+            let candidate = dir.join(&file_name);
+            if candidate.exists() {
+                tracing::info!(path = %candidate.display(), "Using model from legacy location");
+                return Ok(candidate);
+            }
+        }
+
+        let local_model_path = PathBuf::from(&file_name);
         if local_model_path.exists() {
             return Ok(local_model_path);
         }
 
-        // Model doesn't exist, download it
-        tracing::info!("Model not found, downloading ggml-{}.bin...", model_size);
+        tracing::info!("Model not found, downloading {file_name}...");
         Self::download_model(model_size, &model_path)?;
-
         Ok(model_path)
     }
 
-    /// Download a Whisper model from HuggingFace
+    /// Download a Whisper model from HuggingFace.
+    ///
+    /// The download is written to a temporary file, checked for completeness
+    /// against the advertised length, and only then moved into place. An
+    /// interrupted download is therefore never mistaken for a complete model.
     fn download_model<P>(model_size: &str, target_path: P) -> Result<()>
     where
         P: AsRef<Path>,
     {
         let target_path = target_path.as_ref();
-        // Create directory if it doesn't exist
         if let Some(parent) = target_path.parent() {
             fs::create_dir_all(parent).context("Failed to create model directory")?;
         }
 
-        // Construct download URL
         let url = format!(
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{}.bin",
-            model_size
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-{model_size}.bin"
         );
+        tracing::info!(url, path = %target_path.display(), "Downloading Whisper model");
 
-        tracing::info!("Downloading from: {}", url);
-        tracing::info!("Saving to: {}", target_path.display());
-
-        // Download the model
         let response = reqwest::blocking::get(&url)
-            .with_context(|| format!("Failed to download model from {}", url))?;
+            .with_context(|| format!("Failed to download model from {url}"))?;
 
         if !response.status().is_success() {
             anyhow::bail!(
-                "Failed to download model: HTTP {}. Model '{}' may not exist.",
-                response.status(),
-                model_size
+                "Failed to download model: HTTP {}. Model '{model_size}' may not exist.",
+                response.status()
             );
         }
 
-        // Get total size for progress tracking
         let total_size = response
             .content_length()
             .context("Failed to get content length")?;
 
-        // Create progress bar
-        let pb = ProgressBar::new(total_size);
-        pb.set_style(
+        let progress = ProgressBar::new(total_size);
+        progress.set_style(
             ProgressStyle::default_bar()
                 .template("{msg}\n{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({bytes_per_sec}, {eta})")
-                .unwrap()
+                .context("Invalid progress template")?
                 .progress_chars("#>-"),
         );
-        pb.set_message(format!("Downloading ggml-{}.bin", model_size));
+        progress.set_message(format!("Downloading ggml-{model_size}.bin"));
 
-        // Write to file with streaming progress
-        let file = fs::File::create(target_path)
-            .with_context(|| format!("Failed to create file: {}", target_path.display()))?;
+        let temp_path = target_path.with_extension("bin.part");
 
-        // Stream the response body in chunks
-        use std::io::copy;
-        let mut content = response;
-
-        // Wrap the file writer with a progress updater
-        struct ProgressWriter<W: Write> {
-            writer: W,
-            progress_bar: ProgressBar,
+        if let Err(e) = stream_to_file(response, &temp_path, &progress) {
+            let _ = fs::remove_file(&temp_path);
+            progress.finish_and_clear();
+            return Err(e);
         }
 
-        impl<W: Write> Write for ProgressWriter<W> {
-            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-                let written = self.writer.write(buf)?;
-                self.progress_bar.inc(written as u64);
-                Ok(written)
-            }
-
-            fn flush(&mut self) -> io::Result<()> {
-                self.writer.flush()
-            }
+        let written = fs::metadata(&temp_path).map(|meta| meta.len()).unwrap_or(0);
+        if written != total_size {
+            let _ = fs::remove_file(&temp_path);
+            progress.finish_and_clear();
+            anyhow::bail!("Incomplete model download: got {written} of {total_size} bytes");
         }
 
-        let mut progress_writer = ProgressWriter {
-            writer: file,
-            progress_bar: pb.clone(),
-        };
-
-        copy(&mut content, &mut progress_writer).context("Failed to write response to file")?;
-
-        pb.finish_with_message(format!("Downloaded ggml-{}.bin successfully!", model_size));
+        fs::rename(&temp_path, target_path).with_context(|| {
+            format!("Failed to move model into place: {}", target_path.display())
+        })?;
+        progress.finish_with_message(format!("Downloaded ggml-{model_size}.bin successfully!"));
 
         Ok(())
     }
@@ -347,5 +381,11 @@ mod tests {
                 "context {context} too small for {seconds}s ({samples} samples)"
             );
         }
+    }
+
+    #[test]
+    fn test_model_dir_ends_with_whisper() {
+        let dir = model_dir().expect("model_dir");
+        assert!(dir.ends_with("whisper"), "{}", dir.display());
     }
 }
