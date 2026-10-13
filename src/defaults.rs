@@ -88,8 +88,9 @@ pub const CHUNK_SIZE: usize = 1024;
 /// Default interval for periodic transcription while speaking (seconds).
 pub const PERIODIC_TRANSCRIPTION_INTERVAL: f32 = 1.0;
 
-/// Default sliding window size for transcription (seconds).
-pub const TRANSCRIPTION_WINDOW: f32 = 5.0;
+/// Maximum audio tail decoded in one transcription pass (seconds). Kept under
+/// Whisper's 30 s window so a pass never needs a second encoder seek.
+pub const TRANSCRIPTION_WINDOW: f32 = 28.0;
 
 /// Default delay before audio is confirmed (seconds).
 pub const TRANSCRIPTION_LAG: f32 = 1.0;

@@ -357,7 +357,7 @@ mod tests {
         assert_eq!(config.min_speech_duration, 0.5);
         assert_eq!(config.chunk_size, 1024);
         assert_eq!(config.periodic_transcription_interval, 1.0);
-        assert_eq!(config.transcription_window, 5.0);
+        assert_eq!(config.transcription_window, 28.0);
         assert_eq!(config.transcription_lag, 1.0);
         assert!(config.output_command.is_none());
         assert_eq!(config.socket_name, "stentor.sock");
@@ -386,7 +386,7 @@ mod tests {
         assert_eq!(config.silence_duration, 2.0); // default
         assert_eq!(config.chunk_size, 1024); // default
         assert_eq!(config.periodic_transcription_interval, 1.0); // default
-        assert_eq!(config.transcription_window, 5.0); // default
+        assert_eq!(config.transcription_window, 28.0); // default
         assert_eq!(config.transcription_lag, 1.0); // default
         assert_eq!(
             config.output_command,
@@ -418,7 +418,7 @@ mod tests {
         assert_eq!(config_file.daemon.silence_duration, 2.0);
         assert_eq!(config_file.daemon.chunk_size, 1024);
         assert_eq!(config_file.daemon.periodic_transcription_interval, 1.0);
-        assert_eq!(config_file.daemon.transcription_window, 5.0);
+        assert_eq!(config_file.daemon.transcription_window, 28.0);
         assert_eq!(config_file.daemon.transcription_lag, 1.0);
         assert!(config_file.client.source.is_none());
         assert_eq!(config_file.kitty.base_background_color, "#1e1e2e");

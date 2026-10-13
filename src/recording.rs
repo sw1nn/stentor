@@ -1,129 +1,37 @@
-//! # Recording Module - Sliding Window Transcription Algorithm
+//! # Recording Module - streaming transcription
 //!
-//! This module handles audio recording and real-time transcription using a sliding
-//! window approach that provides stable "confirmed" text and tentative "preview" text.
+//! Records audio from PulseAudio, runs voice activity detection, and produces a
+//! live transcript in two parts:
 //!
-//! ## Algorithm Overview
+//! - **confirmed** text (stable, shown in white), and
+//! - **preview** text (tentative, shown in grey).
 //!
-//! The transcription uses three key parameters:
-//! - **window_chunks**: Size of the confirmation window (e.g., 5 seconds)
-//! - **lag_chunks**: How far behind we confirm audio (e.g., 1 second)
-//! - **periodic_threshold**: How often we run transcription (e.g., every 1 second)
+//! ## Algorithm
 //!
-//! ```text
-//! Audio Timeline (chunks arriving over time):
+//! While a session is active, audio chunks are appended to a buffer. Every
+//! `periodic-transcription-interval` seconds the unconfirmed tail is decoded
+//! once, with the confirmed text passed as the decoder's initial prompt.
 //!
-//! |<-------- confirmed -------->|<-- lag -->|
-//! [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14]  ← total chunks
-//!                                ^
-//!                                └── current time (chunk 14 just arrived)
+//! The decode covers `[confirmed .. confirmed + transcription-window]`. The
+//! window is kept under Whisper's 30 s limit so one pass is enough. Segments
+//! that end older than `transcription-lag` are committed to the confirmed text,
+//! which advances `confirmed` to that segment boundary. The remaining segments
+//! become the preview. Because commits fall on Whisper segment boundaries, a
+//! word is never cut in half between the confirmed and preview parts.
 //!
-//! settled_chunks = total - lag = 14 - 3 = 11
-//! can_confirm = settled_chunks >= confirmed_idx + window_size
+//! ```mermaid
+//! graph LR
+//!   A["confirmed"] --> B["settled (older than lag)"] --> C["preview (recent)"]
 //! ```
 //!
-//! ## Sliding Window State Machine
+//! ## Behaviour
 //!
-//! ```text
-//!                    ┌─────────────────────────────────────┐
-//!                    │         Recording Session           │
-//!                    └─────────────────────────────────────┘
-//!                                    │
-//!                                    ▼
-//!                    ┌─────────────────────────────────────┐
-//!                    │  Initialize: confirmed_idx = 0      │
-//!                    │  window_size, lag, periodic set     │
-//!                    └─────────────────────────────────────┘
-//!                                    │
-//!                                    ▼
-//!          ┌─────────────────────────────────────────────────────┐
-//!          │                  For each chunk:                    │
-//!          │  1. Add chunk to recorded_audio                     │
-//!          │  2. Increment chunks_since_transcription            │
-//!          └─────────────────────────────────────────────────────┘
-//!                                    │
-//!                ┌───────────────────┴───────────────────┐
-//!                │ chunks_since_transcription            │
-//!                │      >= periodic_threshold?           │
-//!                └───────────────────┬───────────────────┘
-//!                       No │                  │ Yes
-//!                          │                  ▼
-//!                          │    ┌──────────────────────────┐
-//!                          │    │ settled = total - lag    │
-//!                          │    │ can_confirm =            │
-//!                          │    │   settled >= confirmed   │
-//!                          │    │            + window      │
-//!                          │    └──────────────────────────┘
-//!                          │                  │
-//!                          │         ┌───────┴───────┐
-//!                          │         │ can_confirm?  │
-//!                          │         └───────┬───────┘
-//!                          │       No │           │ Yes
-//!                          │          │           ▼
-//!                          │          │  ┌────────────────────────┐
-//!                          │          │  │ Transcribe window:     │
-//!                          │          │  │ [confirmed..confirmed  │
-//!                          │          │  │          +window]      │
-//!                          │          │  │ confirmed += window    │
-//!                          │          │  └────────────────────────┘
-//!                          │          │           │
-//!                          │          └─────┬─────┘
-//!                          │                ▼
-//!                          │    ┌──────────────────────────┐
-//!                          │    │ Transcribe preview:      │
-//!                          │    │ [confirmed..total]       │
-//!                          │    │ (tentative, may change)  │
-//!                          │    └──────────────────────────┘
-//!                          │                │
-//!                          └────────────────┘
-//!                                    │
-//!                                    ▼
-//!                          ┌─────────────────┐
-//!                          │  Session ends   │
-//!                          │  (silence/stop) │
-//!                          └─────────────────┘
-//!                                    │
-//!                                    ▼
-//!                    ┌─────────────────────────────────────┐
-//!                    │  Final: Transcribe remaining        │
-//!                    │  [confirmed..total] as confirmed    │
-//!                    └─────────────────────────────────────┘
-//! ```
-//!
-//! ## Example Timeline
-//!
-//! ```text
-//! Config: window=10, lag=3, periodic=5
-//!
-//! Time →
-//! Chunks:  [0][1][2][3][4][5][6][7][8][9][10][11][12][13][14][15][16][17][18]
-//!
-//! At chunk 5 (periodic trigger):
-//!   total=5, settled=2, confirmed=0, can_confirm=false (2 < 0+10)
-//!   Preview: [0..5]
-//!
-//! At chunk 10:
-//!   total=10, settled=7, confirmed=0, can_confirm=false (7 < 0+10)
-//!   Preview: [0..10]
-//!
-//! At chunk 15:
-//!   total=15, settled=12, confirmed=0, can_confirm=true (12 >= 0+10)
-//!   Confirm: [0..10] → confirmed=10
-//!   Preview: [10..15]
-//!
-//! At end (chunk 18):
-//!   Remaining: [10..18] transcribed as final
-//!
-//! Result: All chunks [0..18] transcribed exactly once
-//! ```
-//!
-//! ## Guarantees
-//!
-//! The algorithm guarantees:
-//! 1. **No gaps**: Every chunk is eventually transcribed
-//! 2. **No overlaps**: No chunk is transcribed twice in confirmed output
-//! 3. **Contiguous windows**: Each confirmed window starts where the previous ended
-//! 4. **Complete coverage**: Remaining chunks at end are always transcribed
+//! - A pre-roll buffer keeps a short slice of pre-onset audio, so soft onsets
+//!   are not clipped.
+//! - Only one transcription runs at a time; a tick is skipped while one is
+//!   queued or running.
+//! - At the end of the session any remaining unconfirmed audio is decoded and
+//!   appended, so every chunk is transcribed exactly once.
 
 use anyhow::Result;
 use async_channel::Sender;
@@ -139,7 +47,7 @@ use crate::defaults;
 use crate::dialog::TranscriptionState;
 use crate::pulse::PulseManager;
 use crate::source_mute::SourceMuteManager;
-use crate::transcription::Transcriber;
+use crate::transcription::{TranscribedSegment, Transcriber};
 
 /// UIMessage types for communication with the daemon app
 /// This is re-exported from daemon_app module
@@ -169,6 +77,191 @@ pub struct RecordingSession {
     pub ui_tx: Sender<UIMessage>,
     pub stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     pub auto_send_slots: Arc<Mutex<Vec<Option<usize>>>>,
+}
+
+/// RAII guard that clears the pipeline's pending flag when dropped, including
+/// on panic, so a failed worker cannot wedge future transcriptions.
+struct PendingGuard(Arc<AtomicBool>);
+
+impl Drop for PendingGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// Shared state and services for periodic transcription.
+#[derive(Clone)]
+struct TranscriptionPipeline {
+    transcriber: Arc<Transcriber>,
+    ui_tx: Sender<UIMessage>,
+    confirmed_text: Arc<Mutex<String>>,
+    confirmed_chunks: Arc<Mutex<usize>>,
+    /// Held for the duration of a worker, so session teardown can wait for it.
+    in_flight: Arc<Mutex<()>>,
+    /// Set while a worker is queued or running, so workers cannot stack up.
+    pending: Arc<AtomicBool>,
+    chunk_size: usize,
+}
+
+impl TranscriptionPipeline {
+    /// Claim the single transcription slot. Returns `false` when one is already
+    /// queued or running.
+    fn try_begin(&self) -> bool {
+        !self.pending.swap(true, Ordering::AcqRel)
+    }
+
+    /// Decode `audio` (starting at chunk `first_chunk`) on a worker thread.
+    ///
+    /// Segments ending at or before `settled` are committed to the confirmed
+    /// text, so cuts fall on Whisper segment boundaries rather than arbitrary
+    /// sample positions. The remaining segments become the preview.
+    fn spawn(&self, audio: Vec<f32>, first_chunk: usize, settled: usize, available_end: usize) {
+        let pipeline = self.clone();
+        thread::spawn(move || pipeline.run(&audio, first_chunk, settled, available_end));
+    }
+
+    fn run(&self, audio: &[f32], first_chunk: usize, settled: usize, available_end: usize) {
+        let _in_flight = self.in_flight.lock();
+        let _pending = PendingGuard(Arc::clone(&self.pending));
+
+        if audio.is_empty() {
+            return;
+        }
+
+        let prompt = {
+            let confirmed = self.confirmed_text.lock();
+            tail_prompt(&confirmed)
+        };
+
+        let segments = match self
+            .transcriber
+            .transcribe_segments(audio, Some(&prompt), true)
+        {
+            Ok(segments) => segments,
+            Err(e) => {
+                tracing::warn!(error = %e, "Periodic transcription failed");
+                return;
+            }
+        };
+
+        let (new_confirmed, committed, preview) = split_by_settled(
+            &segments,
+            first_chunk,
+            settled,
+            available_end,
+            self.chunk_size,
+        );
+
+        if new_confirmed > first_chunk {
+            append_confirmed(&self.confirmed_text, &committed);
+            *self.confirmed_chunks.lock() = new_confirmed;
+        }
+
+        let confirmed = self.confirmed_text.lock().clone();
+        let _ = self.ui_tx.send_blocking(UIMessage::SetConfirmedAndPreview(
+            confirmed,
+            preview.trim().to_string(),
+        ));
+    }
+}
+
+/// Start a transcription of the unconfirmed tail, if one is not already
+/// running. Returns whether a worker was spawned.
+fn trigger_transcription(
+    recorded_audio: &[Vec<f32>],
+    pipeline: &TranscriptionPipeline,
+    confirmed_chunks: &Mutex<usize>,
+    lag_chunks: usize,
+    max_tail_chunks: usize,
+) -> bool {
+    if recorded_audio.is_empty() {
+        return false;
+    }
+
+    let total_chunks = recorded_audio.len();
+    let current_confirmed = *confirmed_chunks.lock();
+    let tail_end = total_chunks.min(current_confirmed + max_tail_chunks);
+    if tail_end <= current_confirmed || !pipeline.try_begin() {
+        return false;
+    }
+
+    let settled_chunks = total_chunks.saturating_sub(lag_chunks);
+    let tail_audio: Vec<f32> = recorded_audio[current_confirmed..tail_end]
+        .iter()
+        .flatten()
+        .copied()
+        .collect();
+
+    tracing::debug!(
+        total_chunks,
+        settled_chunks,
+        current_confirmed,
+        tail_chunks = tail_end - current_confirmed,
+        "Periodic transcription"
+    );
+
+    pipeline.spawn(tail_audio, current_confirmed, settled_chunks, tail_end);
+    true
+}
+
+/// Append `addition` to the confirmed text, separated by a single space.
+fn append_confirmed(target: &Mutex<String>, addition: &str) {
+    let addition = addition.trim();
+    if addition.is_empty() {
+        return;
+    }
+    let mut text = target.lock();
+    if !text.is_empty() && !text.ends_with(' ') {
+        text.push(' ');
+    }
+    text.push_str(addition);
+}
+
+/// Convert a Whisper segment end time (centiseconds of 16 kHz audio) to chunks.
+fn samples_to_chunks(centiseconds: i64, chunk_size: usize) -> usize {
+    let samples = (centiseconds.max(0) as u64).saturating_mul(160);
+    (samples / chunk_size.max(1) as u64) as usize
+}
+
+/// Split decoded segments into (new confirmed chunk index, committed text,
+/// preview text).
+///
+/// A segment is committed when it ends at or before `settled` (the audio older
+/// than the confirmation lag) and within `available_end` (the end of the audio
+/// that was decoded). Everything else is preview.
+fn split_by_settled(
+    segments: &[TranscribedSegment],
+    first_chunk: usize,
+    settled: usize,
+    available_end: usize,
+    chunk_size: usize,
+) -> (usize, String, String) {
+    let mut new_confirmed = first_chunk;
+    let mut committed = String::new();
+    let mut preview = String::new();
+    for segment in segments {
+        let end_chunk = first_chunk + samples_to_chunks(segment.end_cs, chunk_size);
+        if end_chunk <= settled && end_chunk <= available_end {
+            committed.push_str(&segment.text);
+            new_confirmed = new_confirmed.max(end_chunk);
+        } else {
+            preview.push_str(&segment.text);
+        }
+    }
+    (new_confirmed, committed, preview)
+}
+
+/// The tail of `text` used as a decoding prompt, cut on a character boundary.
+fn tail_prompt(text: &str) -> String {
+    const MAX_PROMPT_CHARS: usize = 224;
+    if text.len() <= MAX_PROMPT_CHARS {
+        return text.to_owned();
+    }
+    let mut start = text.len() - MAX_PROMPT_CHARS;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    text[start..].to_owned()
 }
 
 pub fn start_recording_session(
@@ -263,8 +356,9 @@ pub fn start_recording_session(
         / config.chunk_size as f32) as usize;
     let mut chunks_since_last_transcription = 0usize;
 
-    // Calculate transcription window size in chunks (for sliding window)
-    let window_chunks = (config.transcription_window * actual_sample_rate as f32
+    // Maximum audio tail decoded in one pass, in chunks. Kept under Whisper's
+    // 30 s window so a pass never needs a second encoder seek.
+    let max_tail_chunks = (config.transcription_window * actual_sample_rate as f32
         / config.chunk_size as f32) as usize;
 
     // Calculate lag in chunks (audio held back before eligible for confirmation)
@@ -288,14 +382,19 @@ pub fn start_recording_session(
     let confirmed_text = Arc::new(Mutex::new(String::new()));
     let confirmed_chunks = Arc::new(Mutex::new(0usize));
 
-    // Track if a transcription is currently in flight to prevent concurrent transcriptions
-    // Using Mutex for RAII - holding the lock means transcription is in flight
+    // Held for the duration of a transcription worker so session teardown can
+    // wait for it to finish.
     let transcription_in_flight = Arc::new(Mutex::new(()));
 
-    let transcriber_clone = Arc::clone(&transcriber);
-    let ui_tx_for_transcription = ui_tx.clone();
-    let confirmed_text_clone = Arc::clone(&confirmed_text);
-    let confirmed_chunks_clone = Arc::clone(&confirmed_chunks);
+    let pipeline = TranscriptionPipeline {
+        transcriber: Arc::clone(&transcriber),
+        ui_tx: ui_tx.clone(),
+        confirmed_text: Arc::clone(&confirmed_text),
+        confirmed_chunks: Arc::clone(&confirmed_chunks),
+        in_flight: Arc::clone(&transcription_in_flight),
+        pending: Arc::new(AtomicBool::new(false)),
+        chunk_size: config.chunk_size,
+    };
 
     // Start in Recording state (waiting for speech)
     let _ = ui_tx.send_blocking(UIMessage::UpdateState(
@@ -367,109 +466,15 @@ pub fn start_recording_session(
 
                         // Periodic transcription while speaking
                         if chunks_since_last_transcription >= periodic_chunks_threshold
-                            && !recorded_audio.is_empty()
-                            && let Some(_guard) = transcription_in_flight.try_lock()
+                            && trigger_transcription(
+                                &recorded_audio,
+                                &pipeline,
+                                &confirmed_chunks,
+                                lag_chunks,
+                                max_tail_chunks,
+                            )
                         {
                             chunks_since_last_transcription = 0;
-
-                            let total_chunks = recorded_audio.len();
-                            let current_confirmed = *confirmed_chunks.lock();
-
-                            // Calculate settled audio (older than lag)
-                            let settled_chunks = total_chunks.saturating_sub(lag_chunks);
-
-                            // Check if we have a full window of settled audio to confirm
-                            let can_confirm = settled_chunks >= current_confirmed + window_chunks;
-
-                            // Clone audio for transcription
-                            let audio_for_transcription: Vec<Vec<f32>> = recorded_audio.clone();
-
-                            tracing::debug!(
-                                total_chunks,
-                                settled_chunks,
-                                current_confirmed,
-                                can_confirm,
-                                "Periodic transcription"
-                            );
-
-                            let transcriber_ref = Arc::clone(&transcriber_clone);
-                            let ui_tx_transcribe = ui_tx_for_transcription.clone();
-                            let confirmed_text_ref = Arc::clone(&confirmed_text_clone);
-                            let confirmed_chunks_ref = Arc::clone(&confirmed_chunks_clone);
-                            let in_flight_mutex = Arc::clone(&transcription_in_flight);
-                            let window_size = window_chunks;
-
-                            thread::spawn(move || {
-                                let _guard = in_flight_mutex.lock();
-
-                                let mut current_confirmed_text = confirmed_text_ref.lock().clone();
-                                let mut current_confirmed_idx = *confirmed_chunks_ref.lock();
-
-                                // If we can confirm a window, transcribe it
-                                if can_confirm {
-                                    let window_end = current_confirmed_idx + window_size;
-                                    let window_audio: Vec<f32> = audio_for_transcription
-                                        [current_confirmed_idx..window_end]
-                                        .iter()
-                                        .flatten()
-                                        .copied()
-                                        .collect();
-
-                                    match transcriber_ref.transcribe(&window_audio) {
-                                        Ok(text) => {
-                                            let cleaned = text
-                                                .replace("[BLANK_AUDIO]", "")
-                                                .trim()
-                                                .to_string();
-                                            if !cleaned.is_empty() {
-                                                if !current_confirmed_text.is_empty() {
-                                                    current_confirmed_text.push(' ');
-                                                }
-                                                current_confirmed_text.push_str(&cleaned);
-                                                tracing::debug!(
-                                                    confirmed = %current_confirmed_text,
-                                                    "Window confirmed"
-                                                );
-                                            }
-                                        }
-                                        Err(e) => {
-                                            tracing::warn!(error = %e, "Window transcription failed");
-                                        }
-                                    }
-
-                                    current_confirmed_idx = window_end;
-
-                                    // Update shared state
-                                    *confirmed_text_ref.lock() = current_confirmed_text.clone();
-                                    *confirmed_chunks_ref.lock() = current_confirmed_idx;
-                                }
-
-                                // Always transcribe remaining (unconfirmed) audio as preview
-                                let preview_audio: Vec<f32> = audio_for_transcription
-                                    [current_confirmed_idx..]
-                                    .iter()
-                                    .flatten()
-                                    .copied()
-                                    .collect();
-
-                                let preview_text = if !preview_audio.is_empty() {
-                                    match transcriber_ref.transcribe(&preview_audio) {
-                                        Ok(text) => {
-                                            text.replace("[BLANK_AUDIO]", "").trim().to_string()
-                                        }
-                                        Err(_) => String::new(),
-                                    }
-                                } else {
-                                    String::new()
-                                };
-
-                                // Send confirmed + preview to UI
-                                let _ =
-                                    ui_tx_transcribe.try_send(UIMessage::SetConfirmedAndPreview(
-                                        current_confirmed_text,
-                                        preview_text,
-                                    ));
-                            });
                         }
                     }
                     SilenceAfterSpeech => {
@@ -490,123 +495,15 @@ pub fn start_recording_session(
                             chunks_since_last_transcription >= periodic_chunks_threshold;
 
                         if (transitioned_to_silence || should_periodic_transcribe)
-                            && !recorded_audio.is_empty()
+                            && trigger_transcription(
+                                &recorded_audio,
+                                &pipeline,
+                                &confirmed_chunks,
+                                lag_chunks,
+                                max_tail_chunks,
+                            )
                         {
-                            // Try to acquire the lock (non-blocking)
-                            // If we can't acquire it, transcription is already in flight
-                            if let Some(_guard) = transcription_in_flight.try_lock() {
-                                chunks_since_last_transcription = 0;
-
-                                let total_chunks = recorded_audio.len();
-                                let current_confirmed = *confirmed_chunks.lock();
-
-                                // Calculate settled audio (older than lag)
-                                let settled_chunks = total_chunks.saturating_sub(lag_chunks);
-
-                                // Check if we have a full window of settled audio to confirm
-                                let can_confirm =
-                                    settled_chunks >= current_confirmed + window_chunks;
-
-                                // Clone audio for transcription
-                                let audio_for_transcription: Vec<Vec<f32>> = recorded_audio.clone();
-
-                                let reason = if transitioned_to_silence {
-                                    "pause"
-                                } else {
-                                    "periodic"
-                                };
-                                tracing::debug!(
-                                    total_chunks,
-                                    settled_chunks,
-                                    current_confirmed,
-                                    can_confirm,
-                                    reason,
-                                    "Transcribing (silence)"
-                                );
-
-                                let transcriber_ref = Arc::clone(&transcriber_clone);
-                                let ui_tx_transcribe = ui_tx_for_transcription.clone();
-                                let confirmed_text_ref = Arc::clone(&confirmed_text_clone);
-                                let confirmed_chunks_ref = Arc::clone(&confirmed_chunks_clone);
-                                let in_flight_mutex = Arc::clone(&transcription_in_flight);
-                                let window_size = window_chunks;
-
-                                thread::spawn(move || {
-                                    let _guard = in_flight_mutex.lock();
-
-                                    let mut current_confirmed_text =
-                                        confirmed_text_ref.lock().clone();
-                                    let mut current_confirmed_idx = *confirmed_chunks_ref.lock();
-
-                                    // If we can confirm a window, transcribe it
-                                    if can_confirm {
-                                        let window_end = current_confirmed_idx + window_size;
-                                        let window_audio: Vec<f32> = audio_for_transcription
-                                            [current_confirmed_idx..window_end]
-                                            .iter()
-                                            .flatten()
-                                            .copied()
-                                            .collect();
-
-                                        match transcriber_ref.transcribe(&window_audio) {
-                                            Ok(text) => {
-                                                let cleaned = text
-                                                    .replace("[BLANK_AUDIO]", "")
-                                                    .trim()
-                                                    .to_string();
-                                                if !cleaned.is_empty() {
-                                                    if !current_confirmed_text.is_empty() {
-                                                        current_confirmed_text.push(' ');
-                                                    }
-                                                    current_confirmed_text.push_str(&cleaned);
-                                                    tracing::debug!(
-                                                        confirmed = %current_confirmed_text,
-                                                        "Window confirmed"
-                                                    );
-                                                }
-                                            }
-                                            Err(e) => {
-                                                tracing::warn!(error = %e, "Window transcription failed");
-                                            }
-                                        }
-
-                                        current_confirmed_idx = window_end;
-
-                                        // Update shared state
-                                        *confirmed_text_ref.lock() = current_confirmed_text.clone();
-                                        *confirmed_chunks_ref.lock() = current_confirmed_idx;
-                                    }
-
-                                    // Always transcribe remaining (unconfirmed) audio as preview
-                                    let preview_audio: Vec<f32> = audio_for_transcription
-                                        [current_confirmed_idx..]
-                                        .iter()
-                                        .flatten()
-                                        .copied()
-                                        .collect();
-
-                                    let preview_text = if !preview_audio.is_empty() {
-                                        match transcriber_ref.transcribe(&preview_audio) {
-                                            Ok(text) => {
-                                                text.replace("[BLANK_AUDIO]", "").trim().to_string()
-                                            }
-                                            Err(_) => String::new(),
-                                        }
-                                    } else {
-                                        String::new()
-                                    };
-
-                                    // Send confirmed + preview to UI
-                                    let _ = ui_tx_transcribe.try_send(
-                                        UIMessage::SetConfirmedAndPreview(
-                                            current_confirmed_text,
-                                            preview_text,
-                                        ),
-                                    );
-                                });
-                            } else {
-                                tracing::debug!("Transcription already in flight, skipping");
-                            }
+                            chunks_since_last_transcription = 0;
                         }
 
                         if result.should_stop {
@@ -698,14 +595,19 @@ pub fn start_recording_session(
             "Transcribing remaining unconfirmed audio"
         );
 
-        match transcriber.transcribe(&remaining_audio) {
-            Ok(result) => {
-                let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
+        let prompt = tail_prompt(&final_text);
+        match transcriber.transcribe_segments(&remaining_audio, Some(&prompt), false) {
+            Ok(segments) => {
+                let text: String = segments
+                    .iter()
+                    .map(|segment| segment.text.as_str())
+                    .collect();
+                let cleaned = text.trim();
                 if !cleaned.is_empty() {
                     if !final_text.is_empty() {
                         final_text.push(' ');
                     }
-                    final_text.push_str(&cleaned);
+                    final_text.push_str(cleaned);
                     tracing::debug!(final_text = %final_text, "Added remaining audio to final text");
                 }
             }
@@ -725,7 +627,7 @@ pub fn start_recording_session(
 
         match transcriber.transcribe(&audio_flat) {
             Ok(result) => {
-                let cleaned = result.replace("[BLANK_AUDIO]", "").trim().to_string();
+                let cleaned = result.trim().to_string();
                 tracing::debug!(result = %cleaned, "Full transcription result");
                 if !cleaned.is_empty() {
                     final_text = cleaned;
@@ -819,328 +721,60 @@ pub fn execute_output_command(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
+    use super::*;
 
-    /// Simulates the transcription window algorithm to verify chunk coverage.
-    ///
-    /// This tracks which chunk ranges are transcribed (confirmed) during periodic
-    /// transcription, and which are transcribed at the end (remaining).
-    struct TranscriptionWindowSimulator {
-        window_chunks: usize,
-        lag_chunks: usize,
-        periodic_threshold: usize,
-        /// Ranges of chunks that were transcribed as "confirmed" windows
-        confirmed_ranges: Vec<(usize, usize)>,
-        /// Range of chunks transcribed at the end as "remaining"
-        remaining_range: Option<(usize, usize)>,
-    }
-
-    impl TranscriptionWindowSimulator {
-        fn new(window_chunks: usize, lag_chunks: usize, periodic_threshold: usize) -> Self {
-            Self {
-                window_chunks,
-                lag_chunks,
-                periodic_threshold,
-                confirmed_ranges: Vec::new(),
-                remaining_range: None,
-            }
-        }
-
-        /// Simulates the full recording session with given total chunks.
-        /// Returns the set of all chunk indices that were transcribed.
-        fn simulate(&mut self, total_chunks: usize) -> HashSet<usize> {
-            let mut confirmed_idx = 0usize;
-            let mut chunks_since_transcription = 0usize;
-
-            // Simulate chunks arriving one at a time
-            for current_total in 1..=total_chunks {
-                chunks_since_transcription += 1;
-
-                // Check if we should run periodic transcription
-                if chunks_since_transcription >= self.periodic_threshold {
-                    chunks_since_transcription = 0;
-
-                    let settled_chunks = current_total.saturating_sub(self.lag_chunks);
-                    let can_confirm = settled_chunks >= confirmed_idx + self.window_chunks;
-
-                    if can_confirm {
-                        let window_end = confirmed_idx + self.window_chunks;
-                        self.confirmed_ranges.push((confirmed_idx, window_end));
-                        confirmed_idx = window_end;
-                    }
-                }
-            }
-
-            // At the end, transcribe remaining unconfirmed audio
-            if confirmed_idx < total_chunks {
-                self.remaining_range = Some((confirmed_idx, total_chunks));
-            }
-
-            self.get_transcribed_chunks()
-        }
-
-        /// Returns all chunk indices that were transcribed
-        fn get_transcribed_chunks(&self) -> HashSet<usize> {
-            let mut chunks = HashSet::new();
-
-            for (start, end) in &self.confirmed_ranges {
-                for i in *start..*end {
-                    chunks.insert(i);
-                }
-            }
-
-            if let Some((start, end)) = self.remaining_range {
-                for i in start..end {
-                    chunks.insert(i);
-                }
-            }
-
-            chunks
-        }
-
-        /// Returns chunks that were transcribed more than once (overlap detection)
-        fn get_overlapping_chunks(&self) -> HashSet<usize> {
-            let mut seen = HashSet::new();
-            let mut overlaps = HashSet::new();
-
-            for (start, end) in &self.confirmed_ranges {
-                for i in *start..*end {
-                    if !seen.insert(i) {
-                        overlaps.insert(i);
-                    }
-                }
-            }
-
-            if let Some((start, end)) = self.remaining_range {
-                for i in start..end {
-                    if !seen.insert(i) {
-                        overlaps.insert(i);
-                    }
-                }
-            }
-
-            overlaps
-        }
+    #[test]
+    fn test_samples_to_chunks() {
+        // 16 kHz: 160 samples per centisecond. 100 cs = 1 s = 16000 samples.
+        assert_eq!(samples_to_chunks(0, 1024), 0);
+        assert_eq!(samples_to_chunks(100, 1024), 16_000 / 1_024);
+        assert_eq!(samples_to_chunks(-5, 1024), 0);
+        // chunk_size is guarded against zero.
+        assert_eq!(samples_to_chunks(64, 0), 10_240);
     }
 
     #[test]
-    fn test_all_chunks_transcribed_exact_windows() {
-        // Scenario: Total chunks divide evenly into windows
-        // window=10, lag=2, periodic=5, total=30
-        // Expected: 3 windows of 10 chunks each, no remainder
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        let transcribed = sim.simulate(30);
-
-        // All 30 chunks should be transcribed
-        let expected: HashSet<usize> = (0..30).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        // No overlaps
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(overlaps.is_empty(), "No chunks should be transcribed twice");
+    fn test_tail_prompt_short() {
+        assert_eq!(tail_prompt("hello"), "hello");
     }
 
     #[test]
-    fn test_all_chunks_transcribed_with_remainder() {
-        // Scenario: Total chunks don't divide evenly
-        // window=10, lag=2, periodic=5, total=35
-        // Expected: 3 windows + 5 remaining chunks
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        let transcribed = sim.simulate(35);
-
-        let expected: HashSet<usize> = (0..35).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        // Should have remainder
-        assert!(
-            sim.remaining_range.is_some(),
-            "Should have remaining chunks"
-        );
-
-        // No overlaps
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(overlaps.is_empty(), "No chunks should be transcribed twice");
+    fn test_tail_prompt_truncates_on_char_boundary() {
+        let text = "aé".repeat(300);
+        let prompt = tail_prompt(&text);
+        assert!(text.ends_with(&prompt));
+        assert!(prompt.len() <= 225, "prompt len {}", prompt.len());
     }
 
     #[test]
-    fn test_all_chunks_transcribed_small_total() {
-        // Scenario: Very few chunks, less than one window
-        // window=10, lag=2, periodic=5, total=5
-        // Expected: All transcribed as "remaining" at the end
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        let transcribed = sim.simulate(5);
-
-        let expected: HashSet<usize> = (0..5).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        // Should have no confirmed windows, only remaining
-        assert!(
-            sim.confirmed_ranges.is_empty(),
-            "Should have no confirmed windows"
-        );
-        assert_eq!(
-            sim.remaining_range,
-            Some((0, 5)),
-            "All should be in remaining"
-        );
+    fn test_split_by_settled() {
+        // 32 cs -> 5120 samples -> 5 chunks; 640 cs -> 102400 samples -> 100 chunks.
+        let segments = vec![
+            TranscribedSegment {
+                end_cs: 32,
+                text: " hello".to_string(),
+            },
+            TranscribedSegment {
+                end_cs: 640,
+                text: " world".to_string(),
+            },
+        ];
+        let (new_confirmed, committed, preview) = split_by_settled(&segments, 0, 50, 200, 1024);
+        assert_eq!(new_confirmed, 5, "first segment is settled");
+        assert_eq!(committed, " hello");
+        assert_eq!(preview, " world", "second segment is not settled");
     }
 
     #[test]
-    fn test_all_chunks_transcribed_exactly_one_window() {
-        // Scenario: Exactly one window worth of settled audio
-        // window=10, lag=2, periodic=5, total=12 (10 settled + 2 lag)
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        let transcribed = sim.simulate(12);
-
-        let expected: HashSet<usize> = (0..12).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-    }
-
-    #[test]
-    fn test_no_gaps_large_simulation() {
-        // Simulate a realistic session: ~30 seconds at 16kHz with 1024 chunk size
-        // That's about 469 chunks
-        // window=5s (~78 chunks), lag=1s (~16 chunks), periodic=1s (~16 chunks)
-        let window_chunks = 78;
-        let lag_chunks = 16;
-        let periodic_threshold = 16;
-        let total_chunks = 469;
-
-        let mut sim =
-            TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
-        let transcribed = sim.simulate(total_chunks);
-
-        // Verify all chunks are covered
-        let expected: HashSet<usize> = (0..total_chunks).collect();
-        let missing: HashSet<_> = expected.difference(&transcribed).collect();
-        assert!(
-            missing.is_empty(),
-            "Missing chunks: {:?} (count: {})",
-            missing,
-            missing.len()
-        );
-
-        // Verify no overlaps
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(
-            overlaps.is_empty(),
-            "Overlapping chunks: {:?} (count: {})",
-            overlaps,
-            overlaps.len()
-        );
-    }
-
-    #[test]
-    fn test_no_gaps_various_sizes() {
-        // Test many different total sizes to catch edge cases
-        let window_chunks = 10;
-        let lag_chunks = 3;
-        let periodic_threshold = 4;
-
-        for total in 1..=100 {
-            let mut sim =
-                TranscriptionWindowSimulator::new(window_chunks, lag_chunks, periodic_threshold);
-            let transcribed = sim.simulate(total);
-
-            let expected: HashSet<usize> = (0..total).collect();
-            assert_eq!(
-                transcribed, expected,
-                "All {} chunks should be transcribed",
-                total
-            );
-
-            let overlaps = sim.get_overlapping_chunks();
-            assert!(
-                overlaps.is_empty(),
-                "No overlaps for {} chunks, got {:?}",
-                total,
-                overlaps
-            );
-        }
-    }
-
-    #[test]
-    fn test_lag_larger_than_window() {
-        // Edge case: lag > window (unusual but should still work)
-        // window=5, lag=10, periodic=3, total=50
-        let mut sim = TranscriptionWindowSimulator::new(5, 10, 3);
-        let transcribed = sim.simulate(50);
-
-        let expected: HashSet<usize> = (0..50).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(overlaps.is_empty(), "No overlaps expected");
-    }
-
-    #[test]
-    fn test_single_chunk() {
-        // Edge case: Only one chunk
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        let transcribed = sim.simulate(1);
-
-        let expected: HashSet<usize> = [0].into_iter().collect();
-        assert_eq!(transcribed, expected, "Single chunk should be transcribed");
-    }
-
-    #[test]
-    fn test_zero_lag() {
-        // Edge case: No lag (immediate confirmation)
-        // window=5, lag=0, periodic=3, total=20
-        let mut sim = TranscriptionWindowSimulator::new(5, 0, 3);
-        let transcribed = sim.simulate(20);
-
-        let expected: HashSet<usize> = (0..20).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(overlaps.is_empty(), "No overlaps expected");
-    }
-
-    #[test]
-    fn test_periodic_threshold_one() {
-        // Edge case: Check every chunk (periodic threshold = 1)
-        // This is aggressive but should still produce correct results
-        let mut sim = TranscriptionWindowSimulator::new(5, 2, 1);
-        let transcribed = sim.simulate(30);
-
-        let expected: HashSet<usize> = (0..30).collect();
-        assert_eq!(transcribed, expected, "All chunks should be transcribed");
-
-        let overlaps = sim.get_overlapping_chunks();
-        assert!(overlaps.is_empty(), "No overlaps expected");
-    }
-
-    #[test]
-    fn test_window_boundaries_are_contiguous() {
-        // Verify that confirmed windows are contiguous (no gaps between windows)
-        let mut sim = TranscriptionWindowSimulator::new(10, 2, 5);
-        sim.simulate(100);
-
-        // Check that each window starts where the previous one ended
-        for i in 1..sim.confirmed_ranges.len() {
-            let prev_end = sim.confirmed_ranges[i - 1].1;
-            let curr_start = sim.confirmed_ranges[i].0;
-            assert_eq!(
-                prev_end,
-                curr_start,
-                "Window {} should start at {} (where window {} ended), but starts at {}",
-                i,
-                prev_end,
-                i - 1,
-                curr_start
-            );
-        }
-
-        // Check that remaining starts where last confirmed ended
-        if let Some((remaining_start, _)) = sim.remaining_range
-            && let Some((_, last_confirmed_end)) = sim.confirmed_ranges.last()
-        {
-            assert_eq!(
-                *last_confirmed_end, remaining_start,
-                "Remaining should start at {} (where last confirmed ended), but starts at {}",
-                last_confirmed_end, remaining_start
-            );
-        }
+    fn test_split_by_settled_respects_available_end() {
+        let segments = vec![TranscribedSegment {
+            end_cs: 640,
+            text: " text".to_string(),
+        }];
+        // Older than settled, but beyond the audio that was decoded.
+        let (new_confirmed, committed, preview) = split_by_settled(&segments, 0, 1_000, 10, 1024);
+        assert_eq!(new_confirmed, 0);
+        assert!(committed.is_empty());
+        assert_eq!(preview, " text");
     }
 }

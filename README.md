@@ -81,7 +81,7 @@ cp config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 | `min-speech-duration` | `0.5` | Minimum speech duration before recording starts |
 | `chunk-size` | `1024` | Audio chunk size in samples (64ms at 16kHz) |
 | `periodic-transcription-interval` | `1.0` | How often to transcribe while speaking (seconds) |
-| `transcription-window` | `5.0` | Sliding window size for transcription (seconds) |
+| `transcription-window` | `28.0` | Maximum audio tail decoded in one transcription pass (seconds) |
 | `transcription-lag` | `1.0` | Delay before audio is confirmed (seconds) |
 | `output-command` | none | Command to execute with transcribed text |
 | `socket-name` | `"stentor.sock"` | Unix socket filename in $XDG_RUNTIME_DIR |

@@ -38,11 +38,11 @@ language = "en"
 # Default: 1.0
 #periodic-transcription-interval = 1.0
 
-# Sliding window size for transcription (in seconds)
-# Only the last N seconds of audio are transcribed for preview
+# Maximum audio tail decoded in one transcription pass (in seconds)
+# Only the most recent N seconds of unconfirmed audio are decoded
 # Keeps latency constant regardless of recording length
-# Default: 5.0
-#transcription-window = 5.0
+# Default: 28.0
+#transcription-window = 28.0
 
 # Lag before audio is confirmed (in seconds)
 # Audio is held back this long before being eligible for confirmation
