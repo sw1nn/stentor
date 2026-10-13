@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
-    Application, ApplicationWindow, Box, Button, DeleteType, Label, LevelBar, MovementStep,
-    Orientation, ScrolledWindow, Spinner, TextView, gdk, glib,
+    Application, Box, Button, DeleteType, Label, LevelBar, MovementStep, Orientation,
+    ScrolledWindow, Spinner, TextView, Window, gdk, glib,
 };
 use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use parking_lot::Mutex;
@@ -145,7 +145,7 @@ pub enum TranscriptionState {
 
 #[derive(Clone)]
 pub struct TranscriptionDialog {
-    window: ApplicationWindow,
+    window: Window,
     state: Arc<Mutex<TranscriptionState>>,
     spinner: Spinner,
     status_label: Label,
@@ -167,12 +167,13 @@ pub struct TranscriptionDialog {
 
 impl TranscriptionDialog {
     pub fn new(app: &Application) -> Self {
-        let window = ApplicationWindow::builder()
+        let window = Window::builder()
             .application(app)
             .title("Transcription")
             .default_width(700)
             .default_height(180)
             .resizable(false)
+            .decorated(false)
             .build();
 
         // An overlay layer surface floats above all windows like rofi, and
@@ -910,7 +911,7 @@ impl TranscriptionDialog {
     }
 
     #[allow(dead_code)]
-    pub fn window(&self) -> &ApplicationWindow {
+    pub fn window(&self) -> &Window {
         &self.window
     }
 }
