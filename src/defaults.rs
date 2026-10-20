@@ -76,6 +76,10 @@ pub const LANGUAGE: &str = "en";
 /// Default seconds of silence before stopping recording.
 pub const SILENCE_DURATION: f32 = 2.0;
 
+/// Default tap threshold for push-to-talk, in seconds. A release sooner than
+/// this latches the session open; `0.0` disables latching.
+pub const PTT_TAP_THRESHOLD: f32 = 0.3;
+
 /// Default RMS threshold for silence detection.
 pub const SILENCE_THRESHOLD: f32 = 0.002;
 

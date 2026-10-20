@@ -159,6 +159,9 @@ pub struct Config {
     #[serde(default = "default_silence_threshold", alias = "silence-threshold")]
     pub silence_threshold: f32,
 
+    #[serde(default = "default_ptt_tap_threshold", alias = "ptt-tap-threshold")]
+    pub ptt_tap_threshold: f32,
+
     #[serde(default = "default_min_speech_duration", alias = "min-speech-duration")]
     pub min_speech_duration: f32,
 
@@ -194,6 +197,7 @@ impl Default for Config {
             language: default_language(),
             silence_duration: default_silence_duration(),
             silence_threshold: default_silence_threshold(),
+            ptt_tap_threshold: default_ptt_tap_threshold(),
             min_speech_duration: default_min_speech_duration(),
             chunk_size: default_chunk_size(),
             periodic_transcription_interval: default_periodic_transcription_interval(),
@@ -219,6 +223,10 @@ fn default_silence_duration() -> f32 {
 
 fn default_silence_threshold() -> f32 {
     defaults::SILENCE_THRESHOLD
+}
+
+fn default_ptt_tap_threshold() -> f32 {
+    defaults::PTT_TAP_THRESHOLD
 }
 
 fn default_min_speech_duration() -> f32 {
@@ -354,6 +362,7 @@ mod tests {
         assert_eq!(config.language, "en");
         assert_eq!(config.silence_duration, 2.0);
         assert_eq!(config.silence_threshold, 0.002);
+        assert_eq!(config.ptt_tap_threshold, 0.3);
         assert_eq!(config.min_speech_duration, 0.5);
         assert_eq!(config.chunk_size, 1024);
         assert_eq!(config.periodic_transcription_interval, 1.0);
@@ -384,6 +393,7 @@ mod tests {
         assert_eq!(config.model, "tiny");
         assert_eq!(config.language, "en"); // default
         assert_eq!(config.silence_duration, 2.0); // default
+        assert_eq!(config.ptt_tap_threshold, 0.3); // default
         assert_eq!(config.chunk_size, 1024); // default
         assert_eq!(config.periodic_transcription_interval, 1.0); // default
         assert_eq!(config.transcription_window, 28.0); // default
@@ -400,6 +410,7 @@ mod tests {
             model = "base"
             silence-duration = 2.0
             silence-threshold = 0.02
+            ptt-tap-threshold = 0.5
             min-speech-duration = 1.0
         "#;
 
@@ -407,6 +418,7 @@ mod tests {
         assert_eq!(config.model, "base");
         assert_eq!(config.silence_duration, 2.0);
         assert_eq!(config.silence_threshold, 0.02);
+        assert_eq!(config.ptt_tap_threshold, 0.5);
         assert_eq!(config.min_speech_duration, 1.0);
     }
 

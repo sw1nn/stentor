@@ -26,6 +26,12 @@ language = "en"
 # Helps filter out brief noise
 #min-speech-duration = 0.5
 
+# Push-to-talk tap threshold in seconds.
+# A ptt-down/ptt-up pair shorter than this latches the session open; a longer
+# hold stops and sends on release. Set to 0 to disable latching.
+# Default: 0.3
+#ptt-tap-threshold = 0.3
+
 # Audio chunk size in samples
 # Larger chunks = better accuracy but more latency
 # Smaller chunks = more responsive but potentially noisier

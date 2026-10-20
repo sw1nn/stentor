@@ -78,6 +78,7 @@ cp config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 | `language` | `"en"` | ISO 639-1 language code, or "auto" for detection |
 | `silence-duration` | `2.0` | Seconds of silence before stopping recording |
 | `silence-threshold` | `0.002` | RMS threshold for silence detection (lower = more sensitive) |
+| `ptt-tap-threshold` | `0.3` | Push-to-talk tap threshold in seconds; `0` disables tap-to-latch |
 | `min-speech-duration` | `0.5` | Minimum speech duration before recording starts |
 | `chunk-size` | `1024` | Audio chunk size in samples (64ms at 16kHz) |
 | `periodic-transcription-interval` | `1.0` | How often to transcribe while speaking (seconds) |
@@ -140,7 +141,7 @@ stentorctl transcribe --source="USB Condenser Microphone"
 # Start recording with Kitty multi-slot handler
 stentorctl transcribe --multi-slot-handler=kitty
 
-# Stop recording and show transcription for review
+# Stop recording and auto-send to the default target
 stentorctl transcribe-end
 
 # Stop recording and auto-send to slot 1
@@ -148,6 +149,10 @@ stentorctl transcribe-end --slot=1
 
 # Stop and send to default output (slot 0)
 stentorctl transcribe-end --slot=0
+
+# Push-to-talk: press starts recording, release stops and sends
+stentorctl ptt-down --unmute-source
+stentorctl ptt-up
 
 # List available audio sources
 stentorctl list-sources
@@ -179,6 +184,40 @@ stentorctl quit
 | `Alt+0` | Send to default output (slot 0) |
 
 During recording, shortcuts stop recording and auto-send. During review, they send the edited text.
+
+### Push-to-Talk (Foot Pedal)
+
+`ptt-down` and `ptt-up` are made for a momentary foot pedal. The daemon owns
+the press timing, so a daemon restart cannot leave a stale latch behind.
+
+- **hold longer than `ptt-tap-threshold`** — start on press, stop and send on
+  release;
+- **tap shorter than `ptt-tap-threshold`** — the session stays open (the
+  microphone and any source unmute stay on) until the next `ptt-down`, which
+  stops and sends.
+
+Silence does not end a push-to-talk session; only a release, a second press, or
+an explicit stop does. The transcript is auto-sent on this path, so there is no
+review step. Use `transcribe` / `transcribe-end` for the hands-free workflow
+with silence auto-stop and review.
+
+Bind both edges of the pedal key. For Hyprland:
+
+```lua
+hl.bind(
+    "XF86Tools",
+    hl.dsp.exec_cmd("stentorctl ptt-down --unmute-source"),
+    { description = "Push-to-talk down" }
+)
+hl.bind(
+    "XF86Tools",
+    hl.dsp.exec_cmd("stentorctl ptt-up"),
+    { release = true, description = "Push-to-talk up" }
+)
+```
+
+To make every release stop and send, set `ptt-tap-threshold = 0` in the
+`[daemon]` section.
 
 ## Multi-Slot Mode (Kitty Terminal)
 

@@ -8,6 +8,7 @@ pub mod keyboard;
 pub mod kitty;
 pub mod multi_slot;
 pub mod palette;
+pub mod ptt;
 pub mod pulse;
 pub mod recording;
 pub mod slot_images;

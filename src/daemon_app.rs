@@ -9,6 +9,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
+use std::time::Duration;
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::audio::RecordingCommand;
@@ -18,6 +19,7 @@ use crate::defaults;
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
 use crate::multi_slot::{HandlerUIMessage, MultiSlotHandler as MultiSlotHandlerTrait};
+use crate::ptt::{Action, PttState, SessionKind};
 use crate::pulse::PulseManager;
 use crate::recording::{
     RecordingSession, UIMessage, execute_output_command, start_recording_session,
@@ -30,6 +32,51 @@ fn notify_undelivered(app: &Application, slot: usize, text: &str) {
     notification.set_body(Some(&format!("No window for slot {slot}.\n\n{text}")));
     notification.set_priority(gio::NotificationPriority::High);
     app.send_notification(None, &notification);
+}
+
+/// Stop the active session and queue `slot` for auto-send once the transcript
+/// is ready.
+///
+/// The stop channel is the liveness token: when it is already gone the session
+/// has finished, so queuing a slot would leak it into the next session.
+fn stop_and_send(
+    stop_tx_storage: &Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>,
+    auto_send_slots: &Mutex<Vec<Option<usize>>>,
+    slot: Option<usize>,
+) -> bool {
+    let stop_tx_lock = stop_tx_storage.lock();
+    let Some(tx) = stop_tx_lock.as_ref() else {
+        return false;
+    };
+    auto_send_slots.lock().push(slot);
+    let _ = tx.send(RecordingCommand::Stop);
+    true
+}
+
+/// The kind of session that is running, if any.
+fn active_session(
+    recording_active: &AtomicBool,
+    active_is_ptt: &AtomicBool,
+) -> Option<SessionKind> {
+    if !recording_active.load(Ordering::Acquire) {
+        None
+    } else if active_is_ptt.load(Ordering::Acquire) {
+        Some(SessionKind::Ptt)
+    } else {
+        Some(SessionKind::HandsFree)
+    }
+}
+
+fn ptt_tap_threshold(configured: f32) -> Duration {
+    if configured.is_finite() && (0.0..=60.0).contains(&configured) {
+        Duration::from_secs_f32(configured)
+    } else {
+        tracing::warn!(
+            value = configured,
+            "Invalid ptt-tap-threshold; using the default"
+        );
+        Duration::from_secs_f32(defaults::PTT_TAP_THRESHOLD)
+    }
 }
 
 pub async fn run(
@@ -89,6 +136,9 @@ pub async fn run(
     let auto_send_slots: Arc<Mutex<Vec<Option<usize>>>> = Arc::new(Mutex::new(Vec::new()));
     // Track if a recording session is currently active (Arc<AtomicBool> for lock-free access from multiple threads)
     let recording_active: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
+    // Whether the active session is a push-to-talk session. A pedal event must
+    // not act on a hands-free session.
+    let active_is_ptt: Arc<AtomicBool> = Arc::new(AtomicBool::new(false));
 
     // Clone for GTK main loop
     let current_dialog_clone = Rc::clone(&current_dialog);
@@ -96,6 +146,7 @@ pub async fn run(
     let current_stop_tx_clone = Arc::clone(&current_stop_tx);
     let auto_send_slots_clone = Arc::clone(&auto_send_slots);
     let recording_active_clone = Arc::clone(&recording_active);
+    let active_is_ptt_clone = Arc::clone(&active_is_ptt);
     let app_clone = app.clone();
     let config_clone = Arc::clone(&config);
     let config_file_clone = Arc::clone(&config_file);
@@ -104,6 +155,10 @@ pub async fn run(
     // context is held; no record stream is open between sessions.
     let pulse = PulseManager::spawn();
 
+    // Push-to-talk phase. The daemon owns the press timing so a daemon restart
+    // cannot leave a stale latch behind.
+    let mut ptt = PttState::new(ptt_tap_threshold(config.ptt_tap_threshold));
+
     // Setup GTK event loop integration with tokio
     glib::MainContext::default().spawn_local(async move {
         while let Some(command) = command_rx.recv().await {
@@ -111,7 +166,39 @@ pub async fn run(
 
             use DaemonCommand::*;
             match command {
-                Start { unmute_source, source, multi_slot_handler } => {
+                Start { unmute_source, source, multi_slot_handler, ptt: is_ptt } => {
+                    if is_ptt {
+                        let active = active_session(&recording_active_clone, &active_is_ptt_clone);
+
+                        match ptt.press(active) {
+                            Action::Start => {}
+                            Action::StopAndSend => {
+                                tracing::info!(
+                                    reason = "latch_closed",
+                                    "Stopping push-to-talk session"
+                                );
+                                if !stop_and_send(
+                                    &current_stop_tx_clone,
+                                    &auto_send_slots_clone,
+                                    None,
+                                ) {
+                                    tracing::warn!("Latch close ignored: session already finished");
+                                }
+                                continue;
+                            }
+                            Action::Ignore => {
+                                tracing::debug!(?active, "Push-to-talk press ignored");
+                                let dialog_ref = current_dialog_clone.borrow();
+                                if let Some(ref dialog) = *dialog_ref {
+                                    dialog.present();
+                                }
+                                continue;
+                            }
+                        }
+                    } else if !recording_active_clone.load(Ordering::Acquire) {
+                        ptt.reset();
+                    }
+
                     // Atomically check-and-set recording_active to prevent race conditions.
                     // If another Start command comes in while we're setting up, it will fail
                     // the compare_exchange and be rejected.
@@ -128,6 +215,7 @@ pub async fn run(
                         continue;
                     }
                     // recording_active is now true - we own the recording session
+                    active_is_ptt_clone.store(is_ptt, Ordering::Release);
 
                     // Reset dialog state (fast). The microphone description is
                     // looked up on a background thread so it never delays the UI
@@ -485,6 +573,7 @@ pub async fn run(
                         let stop_tx_storage = Arc::clone(&current_stop_tx_clone);
                         let auto_send_for_recording = Arc::clone(&auto_send_slots_clone);
                         let recording_active_for_thread = Arc::clone(&recording_active_clone);
+                        let active_is_ptt_for_thread = Arc::clone(&active_is_ptt_clone);
 
                         // recording_active was set atomically at the start via compare_exchange
 
@@ -497,6 +586,7 @@ pub async fn run(
                                     ui_tx: ui_tx_for_recording,
                                     stop_tx_storage: stop_tx_storage.clone(),
                                     auto_send_slots: auto_send_for_recording.clone(),
+                                    ptt: is_ptt,
                                 },
                                 unmute_source,
                                 source,
@@ -522,17 +612,32 @@ pub async fn run(
                             auto_send_for_recording.lock().clear();
                             // Clear recording active flag
                             recording_active_for_thread.store(false, Ordering::Release);
+                            active_is_ptt_for_thread.store(false, Ordering::Release);
                             tracing::debug!("Recording thread finished, cleared recording_active flag");
                         });
                 }
                 Stop { command_slot } => {
-                    // Store the command slot for auto-send after transcription
-                    auto_send_slots_clone.lock().push(command_slot);
+                    if !stop_and_send(
+                        &current_stop_tx_clone,
+                        &auto_send_slots_clone,
+                        command_slot,
+                    ) {
+                        tracing::debug!("Stop ignored: no active recording session");
+                    }
+                }
+                PttUp => {
+                    let active = active_session(&recording_active_clone, &active_is_ptt_clone);
 
-                    // Trigger manual stop
-                    let stop_tx_lock = current_stop_tx_clone.lock();
-                    if let Some(ref tx) = *stop_tx_lock {
-                        let _ = tx.send(RecordingCommand::Stop);
+                    if matches!(ptt.release(active), Action::StopAndSend) {
+                        tracing::info!(
+                            reason = "hold_released",
+                            "Stopping push-to-talk session"
+                        );
+                        if !stop_and_send(&current_stop_tx_clone, &auto_send_slots_clone, None) {
+                            tracing::warn!("Push-to-talk release ignored: session already finished");
+                        }
+                    } else {
+                        tracing::debug!(?active, "Push-to-talk release ignored");
                     }
                 }
                 Status => {

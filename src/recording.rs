@@ -81,6 +81,9 @@ pub struct RecordingSession {
     pub ui_tx: Sender<UIMessage>,
     pub stop_tx_storage: Arc<Mutex<Option<std::sync::mpsc::Sender<RecordingCommand>>>>,
     pub auto_send_slots: Arc<Mutex<Vec<Option<usize>>>>,
+    /// Push-to-talk session: the VAD silence stop is disabled, so only an
+    /// explicit stop ends the session.
+    pub ptt: bool,
 }
 
 /// RAII guard that clears the pipeline's pending flag when dropped, including
@@ -305,6 +308,7 @@ pub fn start_recording_session(
         ui_tx,
         stop_tx_storage,
         auto_send_slots,
+        ptt,
     } = session;
 
     tracing::info!("Starting recording session");
@@ -546,7 +550,7 @@ pub fn start_recording_session(
                             chunks_since_last_transcription = 0;
                         }
 
-                        if result.should_stop {
+                        if result.should_stop && !ptt {
                             tracing::debug!(
                                 "VAD detected end of speech (silence duration exceeded)"
                             );

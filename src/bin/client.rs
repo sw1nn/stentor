@@ -10,17 +10,8 @@ use tokio::net::UnixStream;
 enum ClientCommand {
     /// Start recording (opens dialog and begins listening)
     Transcribe {
-        /// Unmute source before recording
-        #[arg(long)]
-        unmute_source: bool,
-
-        /// Audio source to use (default: from config or PulseAudio default)
-        #[arg(long)]
-        source: Option<String>,
-
-        /// Multi-slot handler to use (none, kitty)
-        #[arg(long)]
-        multi_slot_handler: Option<MultiSlotHandler>,
+        #[command(flatten)]
+        start: StartArgs,
     },
     /// Stop recording and finalize transcription
     TranscribeEnd {
@@ -29,6 +20,13 @@ enum ClientCommand {
         #[arg(long)]
         slot: Option<usize>,
     },
+    /// Push-to-talk key down: start recording, or stop and send when latched
+    PttDown {
+        #[command(flatten)]
+        start: StartArgs,
+    },
+    /// Push-to-talk key up: stop and send after a hold; ignored after a tap
+    PttUp,
     /// Launch a new terminal window with STENTOR_SLOT env var
     Launch {
         /// Command to run in the new window (defaults to shell if not specified)
@@ -43,6 +41,41 @@ enum ClientCommand {
     ListSources,
     /// Generate shell completions
     Completions { shell: clap_complete::Shell },
+}
+
+#[derive(clap::Args)]
+struct StartArgs {
+    /// Unmute source before recording
+    #[arg(long)]
+    unmute_source: bool,
+
+    /// Audio source to use (default: from config or PulseAudio default)
+    #[arg(long)]
+    source: Option<String>,
+
+    /// Multi-slot handler to use (none, kitty)
+    #[arg(long)]
+    multi_slot_handler: Option<MultiSlotHandler>,
+}
+
+impl StartArgs {
+    fn into_daemon_command(self, client_config: &ClientConfig, ptt: bool) -> DaemonCommand {
+        // Use CLI source if specified, otherwise fall back to config
+        let source = self.source.or_else(|| client_config.source.clone());
+
+        // Determine multi-slot handler from CLI arg or config
+        let multi_slot_handler = self
+            .multi_slot_handler
+            .or_else(|| client_config.multi_slot_handler.clone())
+            .unwrap_or(MultiSlotHandler::None);
+
+        DaemonCommand::Start {
+            unmute_source: self.unmute_source,
+            source,
+            multi_slot_handler,
+            ptt,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -74,6 +107,13 @@ enum ClientCommand {
   # Stop and auto-send to default output
   stentorctl transcribe-end --slot=0
 
+  # Push-to-talk: press starts, hold and release stops and sends
+  stentorctl ptt-down --unmute-source
+  stentorctl ptt-up
+
+  # A tap shorter than ptt-tap-threshold latches the session open;
+  # the next ptt-down stops and sends.
+
 Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.
 ")]
 struct Cli {
@@ -98,9 +138,11 @@ async fn main() -> Result<()> {
 
     // Default to Transcribe if no subcommand provided
     let client_command = cli.command.unwrap_or(ClientCommand::Transcribe {
-        unmute_source: false,
-        source: None,
-        multi_slot_handler: None,
+        start: StartArgs {
+            unmute_source: false,
+            source: None,
+            multi_slot_handler: None,
+        },
     });
 
     // Handle list-sources command locally (doesn't need daemon)
@@ -147,26 +189,10 @@ async fn main() -> Result<()> {
     // Build daemon command from client command
     use ClientCommand::*;
     let command = match client_command {
-        Transcribe {
-            unmute_source,
-            source,
-            multi_slot_handler,
-        } => {
-            // Use CLI source if specified, otherwise fall back to config
-            let source = source.or(client_config.source);
-
-            // Determine multi-slot handler from CLI arg or config
-            let multi_slot_handler = multi_slot_handler
-                .or(client_config.multi_slot_handler)
-                .unwrap_or(MultiSlotHandler::None);
-
-            DaemonCommand::Start {
-                unmute_source,
-                source,
-                multi_slot_handler,
-            }
-        }
+        Transcribe { start } => start.into_daemon_command(&client_config, false),
         TranscribeEnd { slot } => DaemonCommand::Stop { command_slot: slot },
+        PttDown { start } => start.into_daemon_command(&client_config, true),
+        PttUp => DaemonCommand::PttUp,
         Status => DaemonCommand::Status,
         Quit => DaemonCommand::Quit,
         ListSources => unreachable!("ListSources handled above"),

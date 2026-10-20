@@ -16,7 +16,7 @@ pub enum MultiSlotHandler {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
+#[serde(tag = "type", rename_all = "kebab-case")]
 pub enum DaemonCommand {
     Start {
         #[serde(default)]
@@ -25,6 +25,10 @@ pub enum DaemonCommand {
         source: Option<String>,
         #[serde(default)]
         multi_slot_handler: MultiSlotHandler,
+        /// Start a push-to-talk session: the VAD silence stop is disabled and
+        /// the daemon arms the press/release state machine.
+        #[serde(default)]
+        ptt: bool,
     },
     Stop {
         /// Destination slot for the transcription. `None` sends to all active
@@ -32,6 +36,8 @@ pub enum DaemonCommand {
         #[serde(default)]
         command_slot: Option<usize>,
     },
+    /// Release the push-to-talk key.
+    PttUp,
     Status,
     Quit,
 }
@@ -174,6 +180,7 @@ async fn handle_client(
                 let response = match command {
                     Start { .. } => "OK: started\n",
                     Stop { .. } => "OK: stopped\n",
+                    PttUp => "OK: released\n",
                     Status => "OK: running\n",
                     Quit => {
                         writer.write_all(b"OK: quitting\n").await?;
@@ -208,6 +215,7 @@ mod tests {
             unmute_source: false,
             source: None,
             multi_slot_handler: MultiSlotHandler::None,
+            ptt: false,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -218,6 +226,7 @@ mod tests {
             unmute_source: true,
             source: None,
             multi_slot_handler: MultiSlotHandler::None,
+            ptt: false,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -228,6 +237,7 @@ mod tests {
             unmute_source: false,
             source: Some("USB Condenser Microphone".to_string()),
             multi_slot_handler: MultiSlotHandler::None,
+            ptt: false,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -238,6 +248,7 @@ mod tests {
             unmute_source: true,
             source: Some("HD-Audio Generic".to_string()),
             multi_slot_handler: MultiSlotHandler::Kitty,
+            ptt: false,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
@@ -294,6 +305,7 @@ mod tests {
             unmute_source: false,
             source: None,
             multi_slot_handler: MultiSlotHandler::None,
+            ptt: false,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""type":"start""#));
@@ -321,6 +333,16 @@ mod tests {
     }
 
     #[test]
+    fn test_daemon_command_ptt_up_json_name() -> Result<()> {
+        let json = serde_json::to_string(&DaemonCommand::PttUp)?;
+        assert_eq!(json, r#"{"type":"ptt-up"}"#);
+
+        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"ptt-up"}"#)?;
+        assert_eq!(cmd, DaemonCommand::PttUp);
+        Ok(())
+    }
+
+    #[test]
     fn test_daemon_command_status_and_quit() {
         let status = DaemonCommand::Status;
         let quit = DaemonCommand::Quit;
@@ -342,26 +364,30 @@ mod tests {
                 unmute_source,
                 source,
                 multi_slot_handler,
+                ptt,
             } => {
                 assert!(!unmute_source); // default false
                 assert!(source.is_none()); // default none
                 assert_eq!(multi_slot_handler, MultiSlotHandler::None); // default none
+                assert!(!ptt); // default false
             }
             _ => panic!("Expected Start command"),
         }
 
         // Test Start command with all fields
-        let json = r##"{"type":"start","unmute_source":true,"source":"my-mic","multi_slot_handler":"kitty"}"##;
+        let json = r##"{"type":"start","unmute_source":true,"source":"my-mic","multi_slot_handler":"kitty","ptt":true}"##;
         let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
         match cmd {
             DaemonCommand::Start {
                 unmute_source,
                 source,
                 multi_slot_handler,
+                ptt,
             } => {
                 assert!(unmute_source);
                 assert_eq!(source, Some("my-mic".to_string()));
                 assert_eq!(multi_slot_handler, MultiSlotHandler::Kitty);
+                assert!(ptt);
             }
             _ => panic!("Expected Start command"),
         }
