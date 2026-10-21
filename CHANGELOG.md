@@ -2,6 +2,19 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.37.0 - 2026-10-21
+#### Features
+- (**client**) add push-to-talk with tap-to-latch - (d623b86) - Neale Swinnerton
+- (**config**) reject unknown configuration fields - (d4c170c) - Neale Swinnerton
+- (**dialog**) hold transcription for review with F2 - (d0e183d) - Neale Swinnerton
+#### Bug Fixes
+- (**client**) send transcribe-end to the focused kitty window - (a459282) - Neale Swinnerton
+- (**transcription**) map large to the real model file and expose more tiers - (ad5d676) - Neale Swinnerton
+#### Performance Improvements
+- (**kitty**) stop reading the ls reply at the frame terminator - (1003186) - Neale Swinnerton
+
+- - -
+
 ## v0.36.0 - 2026-10-13
 #### Features
 - (**transcription**) verify model downloads against the published checksum - (6de788e) - Neale Swinnerton
