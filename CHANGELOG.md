@@ -2,6 +2,12 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.38.0 - 2026-10-26
+#### Features
+- <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**daemon**) replace unix socket control with D-Bus - (6271bd1) - Neale Swinnerton
+
+- - -
+
 ## v0.37.0 - 2026-10-21
 #### Features
 - (**client**) add push-to-talk with tap-to-latch - (d623b86) - Neale Swinnerton
