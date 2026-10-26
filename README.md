@@ -171,9 +171,9 @@ is a client for this interface, but any D-Bus client can call it directly.
 
 | Property | Value |
 |----------|-------|
-| Bus name | `com.sw1nn.stentor` |
-| Object path | `/com/sw1nn/stentor` |
-| Interface | `com.sw1nn.stentor.Control` |
+| Bus name | `com.sw1nn.Stentor` |
+| Object path | `/com/sw1nn/Stentor` |
+| Interface | `com.sw1nn.Stentor.Control` |
 
 Methods:
 
@@ -189,16 +189,19 @@ Methods:
 Inspect or call the interface with `busctl`:
 
 ```bash
-busctl --user introspect com.sw1nn.stentor /com/sw1nn/stentor
-busctl --user call com.sw1nn.stentor /com/sw1nn/stentor com.sw1nn.stentor.Control Status
+busctl --user introspect com.sw1nn.Stentor /com/sw1nn/Stentor
+busctl --user call com.sw1nn.Stentor /com/sw1nn/Stentor com.sw1nn.Stentor.Control Status
 ```
 
 > [!NOTE]
+> Earlier releases used `com.sw1nn.stentor`, `/com/sw1nn/stentor` and
+> `com.sw1nn.stentor.Control`. The daemon no longer serves those names.
+>
 > The former `socket-name` configuration key is accepted but ignored. The daemon
 > logs a warning when it is present.
 >
 > Control requires a reachable user session bus. Only one daemon can own
-> `com.sw1nn.stentor` at a time. A stale `$XDG_RUNTIME_DIR/stentor.sock` left by
+> `com.sw1nn.Stentor` at a time. A stale `$XDG_RUNTIME_DIR/stentor.sock` left by
 > an older version can be deleted.
 
 ### Workflow

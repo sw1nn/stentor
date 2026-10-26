@@ -5,9 +5,9 @@ use stentor::config::ClientConfig;
 use stentor::daemon::{BUS_NAME, INTERFACE_NAME, MultiSlotHandler};
 
 #[zbus::proxy(
-    interface = "com.sw1nn.stentor.Control",
-    default_service = "com.sw1nn.stentor",
-    default_path = "/com/sw1nn/stentor"
+    interface = "com.sw1nn.Stentor.Control",
+    default_service = "com.sw1nn.Stentor",
+    default_path = "/com/sw1nn/Stentor"
 )]
 trait StentorControl {
     #[zbus(name = "Start")]

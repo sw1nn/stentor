@@ -171,7 +171,7 @@ pub async fn run(
 
     // Create GTK application
     let app = Application::builder()
-        .application_id("com.sw1nn.transcription")
+        .application_id("com.sw1nn.Stentor")
         .flags(gtk4::gio::ApplicationFlags::NON_UNIQUE)
         .build();
 

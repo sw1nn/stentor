@@ -9,13 +9,13 @@ use tokio::sync::mpsc;
 // constants must stay in sync with the attributes in this module and in
 // `src/bin/client.rs`.
 /// Well-known D-Bus name owned by the daemon.
-pub const BUS_NAME: &str = "com.sw1nn.stentor";
+pub const BUS_NAME: &str = "com.sw1nn.Stentor";
 
 /// Object path that exposes the control interface.
-pub const OBJECT_PATH: &str = "/com/sw1nn/stentor";
+pub const OBJECT_PATH: &str = "/com/sw1nn/Stentor";
 
 /// D-Bus interface for daemon control operations.
-pub const INTERFACE_NAME: &str = "com.sw1nn.stentor.Control";
+pub const INTERFACE_NAME: &str = "com.sw1nn.Stentor.Control";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
@@ -89,7 +89,7 @@ impl ControlInterface {
     }
 }
 
-#[zbus::interface(name = "com.sw1nn.stentor.Control")]
+#[zbus::interface(name = "com.sw1nn.Stentor.Control")]
 impl ControlInterface {
     /// Start a transcription session.
     ///
