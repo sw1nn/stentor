@@ -1,10 +1,39 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
-use stentor::config::{ClientConfig, Config};
-use stentor::daemon::{DaemonCommand, MultiSlotHandler};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
+use std::future::Future;
+use stentor::config::ClientConfig;
+use stentor::daemon::{BUS_NAME, INTERFACE_NAME, MultiSlotHandler};
+
+#[zbus::proxy(
+    interface = "com.sw1nn.stentor.Control",
+    default_service = "com.sw1nn.stentor",
+    default_path = "/com/sw1nn/stentor"
+)]
+trait StentorControl {
+    #[zbus(name = "Start")]
+    async fn start(
+        &self,
+        unmute_source: bool,
+        source: &str,
+        multi_slot_handler: &str,
+        ptt: bool,
+    ) -> zbus::Result<()>;
+
+    #[zbus(name = "Stop")]
+    async fn stop(&self) -> zbus::Result<()>;
+
+    #[zbus(name = "StopAtSlot")]
+    async fn stop_at_slot(&self, command_slot: u32) -> zbus::Result<()>;
+
+    #[zbus(name = "PttUp")]
+    async fn ptt_up(&self) -> zbus::Result<()>;
+
+    #[zbus(name = "Status")]
+    async fn status(&self) -> zbus::Result<String>;
+
+    #[zbus(name = "Quit")]
+    async fn quit(&self) -> zbus::Result<()>;
+}
 
 #[derive(Subcommand)]
 enum ClientCommand {
@@ -59,8 +88,15 @@ struct StartArgs {
     multi_slot_handler: Option<MultiSlotHandler>,
 }
 
+struct StartParams {
+    unmute_source: bool,
+    source: Option<String>,
+    multi_slot_handler: MultiSlotHandler,
+    ptt: bool,
+}
+
 impl StartArgs {
-    fn into_daemon_command(self, client_config: &ClientConfig, ptt: bool) -> DaemonCommand {
+    fn into_start_params(self, client_config: &ClientConfig, ptt: bool) -> StartParams {
         // Use CLI source if specified, otherwise fall back to config
         let source = self.source.or_else(|| client_config.source.clone());
 
@@ -70,7 +106,7 @@ impl StartArgs {
             .or_else(|| client_config.multi_slot_handler.clone())
             .unwrap_or(MultiSlotHandler::None);
 
-        DaemonCommand::Start {
+        StartParams {
             unmute_source: self.unmute_source,
             source,
             multi_slot_handler,
@@ -118,10 +154,6 @@ impl StartArgs {
 Configuration can be set in $XDG_CONFIG_HOME/stentor/config.toml.
 ")]
 struct Cli {
-    /// Unix socket path (default: from config or $XDG_RUNTIME_DIR/stentor.sock)
-    #[arg(long)]
-    socket: Option<PathBuf>,
-
     #[command(subcommand)]
     command: Option<ClientCommand>,
 }
@@ -169,66 +201,97 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Load configs to get socket path and client settings
-    let config = Config::load().context("Failed to load configuration")?;
+    // Load client config for default source and multi-slot handler
     let client_config = ClientConfig::load().context("Failed to load client configuration")?;
 
-    let socket_path = if let Some(custom_socket) = cli.socket {
-        custom_socket
-    } else {
-        config.socket_path()?
-    };
+    let connection = zbus::Connection::session()
+        .await
+        .context("Failed to connect to the D-Bus session bus")?;
+    let proxy = StentorControlProxy::new(&connection)
+        .await
+        .with_context(|| format!("Failed to create proxy for {BUS_NAME} ({INTERFACE_NAME})"))?;
 
-    // Connect to daemon
-    let mut stream = UnixStream::connect(&socket_path).await.with_context(|| {
-        format!(
-            "Failed to connect to daemon at {}. Is the daemon running?",
-            socket_path.display()
-        )
-    })?;
-
-    // Build daemon command from client command
     use ClientCommand::*;
-    let command = match client_command {
-        Transcribe { start } => start.into_daemon_command(&client_config, false),
-        TranscribeEnd { slot } => DaemonCommand::Stop { command_slot: slot },
-        PttDown { start } => start.into_daemon_command(&client_config, true),
-        PttUp => DaemonCommand::PttUp,
-        Status => DaemonCommand::Status,
-        Quit => DaemonCommand::Quit,
+    let response = match client_command {
+        Transcribe { start } => {
+            let params = start.into_start_params(&client_config, false);
+            call_start(&proxy, params).await?;
+            "OK: started"
+        }
+        TranscribeEnd { slot } => {
+            call_stop(&proxy, slot).await?;
+            "OK: stopped"
+        }
+        PttDown { start } => {
+            let params = start.into_start_params(&client_config, true);
+            call_start(&proxy, params).await?;
+            "OK: started"
+        }
+        PttUp => {
+            call(proxy.ptt_up(), "release push-to-talk").await?;
+            "OK: released"
+        }
+        Status => {
+            let status = call(proxy.status(), "query daemon status").await?;
+            println!("OK: {status}");
+            return Ok(());
+        }
+        Quit => {
+            call(proxy.quit(), "quit daemon").await?;
+            "OK: quitting"
+        }
         ListSources => unreachable!("ListSources handled above"),
         Launch { .. } => unreachable!("Launch handled above"),
         Completions { .. } => unreachable!("Completions handled above"),
     };
 
-    // Serialize to JSON
-    let command_str =
-        serde_json::to_string(&command).context("Failed to serialize command")? + "\n";
-
-    stream
-        .write_all(command_str.as_bytes())
-        .await
-        .context("Failed to send command")?;
-
-    // Read response
-    let (reader, _writer) = stream.split();
-    let mut reader = BufReader::new(reader);
-    let mut response = String::new();
-
-    reader
-        .read_line(&mut response)
-        .await
-        .context("Failed to read response")?;
-
-    // Print response
-    print!("{}", response);
-
-    // Check if response indicates error
-    if response.starts_with("ERROR") {
-        std::process::exit(1);
-    }
-
+    println!("{response}");
     Ok(())
+}
+
+async fn call_start(proxy: &StentorControlProxy<'_>, params: StartParams) -> Result<()> {
+    let multi_slot_handler = params.multi_slot_handler.to_string();
+    call(
+        proxy.start(
+            params.unmute_source,
+            params.source.as_deref().unwrap_or_default(),
+            &multi_slot_handler,
+            params.ptt,
+        ),
+        "start transcription",
+    )
+    .await
+}
+
+async fn call_stop(proxy: &StentorControlProxy<'_>, slot: Option<usize>) -> Result<()> {
+    match slot {
+        Some(slot) => {
+            let slot =
+                u32::try_from(slot).with_context(|| format!("Slot {slot} is out of range"))?;
+            call(proxy.stop_at_slot(slot), "stop transcription").await
+        }
+        None => call(proxy.stop(), "stop transcription").await,
+    }
+}
+
+async fn call<T, F>(future: F, operation: &str) -> Result<T>
+where
+    F: Future<Output = zbus::Result<T>>,
+{
+    future.await.map_err(|error| {
+        let context = match &error {
+            zbus::Error::FDO(error)
+                if matches!(
+                    error.as_ref(),
+                    zbus::fdo::Error::ServiceUnknown(_) | zbus::fdo::Error::NameHasNoOwner(_)
+                ) =>
+            {
+                format!("Failed to {operation} via D-Bus ({BUS_NAME}). Is stentord running?")
+            }
+            _ => format!("Failed to {operation} via D-Bus ({BUS_NAME})"),
+        };
+        anyhow::Error::new(error).context(context)
+    })
 }
 
 fn list_sources() -> Result<()> {

@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use libadwaita as adw;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use stentor::config::{Config, ConfigFile};
@@ -29,10 +28,6 @@ struct Cli {
     /// Language code for transcription (default: from config or 'en')
     #[arg(long)]
     language: Option<String>,
-
-    /// Unix socket path (default: $XDG_RUNTIME_DIR/stentor.sock)
-    #[arg(long)]
-    socket: Option<PathBuf>,
 
     /// Command to execute with transcribed text. Use $TRANSCRIPTION environment variable.
     #[arg(long)]
@@ -128,16 +123,9 @@ async fn main() -> Result<()> {
         std::thread::spawn(move || transcriber.warm_up());
     }
 
-    // Determine socket path
-    let socket_path = if let Some(custom_socket) = cli.socket {
-        custom_socket
-    } else {
-        config.socket_path()?
-    };
-
     // Run daemon application
     // Wrap configs in Arc to avoid cloning throughout the application
     let config = Arc::new(config);
     let config_file = Arc::new(config_file);
-    stentor::daemon_app::run(config, config_file, transcriber, socket_path).await
+    stentor::daemon_app::run(config, config_file, transcriber).await
 }

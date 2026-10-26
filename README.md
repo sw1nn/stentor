@@ -10,6 +10,7 @@ Real-time voice transcription daemon using OpenAI's Whisper model. Stentor provi
 - **Multiple Whisper models** - tiny, base, small, medium, large, large-v3-turbo
 - **PulseAudio integration** with configurable audio source
 - **Multi-slot output** - send transcriptions to multiple Kitty terminal windows
+- **D-Bus control interface** - drive the daemon from any D-Bus client
 - **Configurable output commands** - clipboard, tmux, xdotool, or custom scripts
 
 ## Installation
@@ -85,7 +86,6 @@ cp config.toml.sample ${XDG_CONFIG_HOME:-~/.config}/stentor/config.toml
 | `transcription-window` | `28.0` | Maximum audio tail decoded in one transcription pass (seconds) |
 | `transcription-lag` | `1.0` | Delay before audio is confirmed (seconds) |
 | `output-command` | none | Command to execute with transcribed text |
-| `socket-name` | `"stentor.sock"` | Unix socket filename in $XDG_RUNTIME_DIR |
 
 ### Client Configuration `[client]`
 
@@ -163,6 +163,43 @@ stentorctl status
 # Quit daemon
 stentorctl quit
 ```
+
+### D-Bus Control Interface
+
+The daemon exposes its control operations on the user session bus. `stentorctl`
+is a client for this interface, but any D-Bus client can call it directly.
+
+| Property | Value |
+|----------|-------|
+| Bus name | `com.sw1nn.stentor` |
+| Object path | `/com/sw1nn/stentor` |
+| Interface | `com.sw1nn.stentor.Control` |
+
+Methods:
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `Start` | `bssb` | Start recording. Arguments: unmute source, audio source, multi-slot handler (`none` or `kitty`), push-to-talk. An empty source uses the configured or default source. |
+| `Stop` | — | Stop recording and send to the focused destination, all active destinations, or the default output. |
+| `StopAtSlot` | `u` | Stop recording and send to a specific slot. |
+| `PttUp` | — | Release the push-to-talk key. |
+| `Status` | — | Return `running` when the daemon is available. |
+| `Quit` | — | Ask the daemon to exit. |
+
+Inspect or call the interface with `busctl`:
+
+```bash
+busctl --user introspect com.sw1nn.stentor /com/sw1nn/stentor
+busctl --user call com.sw1nn.stentor /com/sw1nn/stentor com.sw1nn.stentor.Control Status
+```
+
+> [!NOTE]
+> The former `socket-name` configuration key is accepted but ignored. The daemon
+> logs a warning when it is present.
+>
+> Control requires a reachable user session bus. Only one daemon can own
+> `com.sw1nn.stentor` at a time. A stale `$XDG_RUNTIME_DIR/stentor.sock` left by
+> an older version can be deleted.
 
 ### Workflow
 
@@ -324,7 +361,6 @@ stentord --model large --language auto --silence-duration 3.0
 |--------|-------------|
 | `--model` | Override Whisper model |
 | `--language` | Override language code |
-| `--socket` | Override socket path |
 | `--output-command` | Override output command |
 | `--silence-duration` | Override silence duration |
 | `-q, --quiet` | Disable logging output |

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use xdg::BaseDirectories;
 
 use crate::defaults;
@@ -190,8 +190,9 @@ pub struct Config {
     #[serde(default, alias = "output-command")]
     pub output_command: Option<String>,
 
-    #[serde(default = "default_socket_name", alias = "socket-name")]
-    pub socket_name: String,
+    /// Former Unix socket name. Ignored; control operations use D-Bus.
+    #[serde(default, alias = "socket-name")]
+    pub socket_name: Option<String>,
 }
 
 impl Default for Config {
@@ -208,7 +209,7 @@ impl Default for Config {
             transcription_window: default_transcription_window(),
             transcription_lag: default_transcription_lag(),
             output_command: None,
-            socket_name: default_socket_name(),
+            socket_name: None,
         }
     }
 }
@@ -251,10 +252,6 @@ fn default_transcription_window() -> f32 {
 
 fn default_transcription_lag() -> f32 {
     defaults::TRANSCRIPTION_LAG
-}
-
-fn default_socket_name() -> String {
-    defaults::SOCKET_NAME.to_string()
 }
 
 impl ConfigFile {
@@ -316,11 +313,10 @@ impl Config {
             Self::default()
         };
 
-        // Warn if socket name doesn't end in .sock
-        if !config.socket_name.ends_with(".sock") {
+        if let Some(socket_name) = &config.socket_name {
             tracing::warn!(
-                "Socket name '{}' does not end with .sock - this may cause issues with some tools",
-                config.socket_name
+                socket_name,
+                "socket-name is no longer used; control operations now use D-Bus"
             );
         }
 
@@ -342,17 +338,6 @@ impl Config {
         tracing::info!("Loaded config from: {}", path.display());
         Ok(config_file.daemon)
     }
-
-    /// Get the socket path in XDG runtime directory
-    pub fn socket_path(&self) -> Result<PathBuf> {
-        let xdg_dirs = BaseDirectories::new();
-
-        let runtime_dir = xdg_dirs
-            .get_runtime_directory()
-            .context("No XDG_RUNTIME_DIR available")?;
-
-        Ok(runtime_dir.join(&self.socket_name))
-    }
 }
 
 #[cfg(test)]
@@ -373,7 +358,17 @@ mod tests {
         assert_eq!(config.transcription_window, 28.0);
         assert_eq!(config.transcription_lag, 1.0);
         assert!(config.output_command.is_none());
-        assert_eq!(config.socket_name, "stentor.sock");
+        assert!(config.socket_name.is_none());
+    }
+
+    #[test]
+    fn test_legacy_socket_name_is_accepted() -> Result<()> {
+        for key in ["socket-name", "socket_name"] {
+            let toml_str = format!("model = \"tiny\"\n{key} = \"custom.sock\"\n");
+            let config: Config = toml::from_str(&toml_str)?;
+            assert_eq!(config.socket_name.as_deref(), Some("custom.sock"));
+        }
+        Ok(())
     }
 
     #[test]

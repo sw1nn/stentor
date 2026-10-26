@@ -78,6 +78,10 @@ libc = "0.2"
 signal-hook = "0.4"
 signal-hook-tokio = { version = "0.4", features = ["futures-v0_3"] }
 
+# D-Bus control interface. zbus uses its own helper runtime rather than the
+# tokio runtime so replies continue while the GTK main loop is busy.
+zbus = "6.1"
+
 [features]
 default = []
 whisper-tracing-backend = ["whisper-rs/tracing_backend"]

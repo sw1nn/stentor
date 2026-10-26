@@ -4,7 +4,6 @@ use gtk4::prelude::*;
 use gtk4::{Application, gio, glib};
 use parking_lot::Mutex;
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +13,7 @@ use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::audio::RecordingCommand;
 use crate::config::{Config, ConfigFile};
-use crate::daemon::{DaemonCommand, DaemonServer, MultiSlotHandler};
+use crate::daemon::{DaemonCommand, MultiSlotHandler};
 use crate::defaults;
 use crate::dialog::{TranscriptionDialog, TranscriptionState};
 use crate::kitty;
@@ -116,22 +115,13 @@ pub async fn run(
     config: Arc<Config>,
     config_file: Arc<ConfigFile>,
     transcriber: Arc<Transcriber>,
-    socket_path: PathBuf,
 ) -> Result<()> {
-    // Create daemon server
-    let mut server = DaemonServer::new(socket_path)?;
-    server.bind().await?;
-
     // Channel for daemon commands
     let (command_tx, mut command_rx) =
         tokio_mpsc::channel::<DaemonCommand>(defaults::COMMAND_CHANNEL_CAPACITY);
 
-    // Spawn daemon server task
-    tokio::spawn(async move {
-        if let Err(e) = server.run(command_tx).await {
-            tracing::error!("Daemon server error: {}", e);
-        }
-    });
+    // Own the D-Bus name for the lifetime of the daemon.
+    let _dbus_connection = crate::daemon::serve(command_tx).await?;
 
     // Create GTK application
     let app = Application::builder()
@@ -155,7 +145,7 @@ pub async fn run(
 
     // Add a dummy activate handler to suppress GTK warning
     app.connect_activate(|_| {
-        // This daemon is socket-driven, not activation-driven
+        // This daemon is D-Bus-driven, not activation-driven
         // This handler exists only to suppress the GTK warning
     });
 
@@ -713,9 +703,6 @@ pub async fn run(
                     } else {
                         tracing::debug!(?active, "Push-to-talk release ignored");
                     }
-                }
-                Status => {
-                    tracing::info!("Status: running");
                 }
                 Quit => {
                     tracing::info!("Quitting daemon");

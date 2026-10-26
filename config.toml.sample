@@ -67,10 +67,6 @@ language = "en"
 #     (requires a tmux session named 'claude': tmux new-session -d -s claude)
 # output-command = "xclip -selection clipboard"
 
-# Unix socket filename (created in $XDG_RUNTIME_DIR)
-# Default: stentor.sock
-#socket-name = "stentor.sock"
-
 [kitty]
 # Patterns for matching windows to auto-assign to slots
 # Supports prefix notation for different match types:

@@ -1,207 +1,181 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
+use std::fmt;
+use std::str::FromStr;
+use thiserror::Error;
 use tokio::sync::mpsc;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+// The zbus interface and proxy macros require string literals, so these
+// constants must stay in sync with the attributes in this module and in
+// `src/bin/client.rs`.
+/// Well-known D-Bus name owned by the daemon.
+pub const BUS_NAME: &str = "com.sw1nn.stentor";
+
+/// Object path that exposes the control interface.
+pub const OBJECT_PATH: &str = "/com/sw1nn/stentor";
+
+/// D-Bus interface for daemon control operations.
+pub const INTERFACE_NAME: &str = "com.sw1nn.stentor.Control";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum, Default)]
 #[serde(rename_all = "lowercase")]
 #[value(rename_all = "lowercase")]
-#[derive(Default)]
 pub enum MultiSlotHandler {
     #[default]
     None,
     Kitty,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+impl fmt::Display for MultiSlotHandler {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::None => "none",
+            Self::Kitty => "kitty",
+        })
+    }
+}
+
+/// Error returned when a `MultiSlotHandler` string is not recognised.
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("unknown multi-slot handler '{handler}' (expected 'none' or 'kitty')")]
+pub struct MultiSlotHandlerParseError {
+    handler: String,
+}
+
+impl FromStr for MultiSlotHandler {
+    type Err = MultiSlotHandlerParseError;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "none" => Ok(Self::None),
+            "kitty" => Ok(Self::Kitty),
+            other => Err(MultiSlotHandlerParseError {
+                handler: other.to_owned(),
+            }),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DaemonCommand {
     Start {
-        #[serde(default)]
         unmute_source: bool,
-        #[serde(default)]
         source: Option<String>,
-        #[serde(default)]
         multi_slot_handler: MultiSlotHandler,
         /// Start a push-to-talk session: the VAD silence stop is disabled and
         /// the daemon arms the press/release state machine.
-        #[serde(default)]
         ptt: bool,
     },
     Stop {
         /// Destination slot for the transcription. `None` sends to all active
         /// multi-slot destinations, or to slot 0 when there are none.
-        #[serde(default)]
         command_slot: Option<usize>,
     },
     /// Release the push-to-talk key.
     PttUp,
-    Status,
     Quit,
 }
 
-pub struct DaemonServer {
-    socket_path: PathBuf,
-    listener: Option<UnixListener>,
-}
-
-impl DaemonServer {
-    pub fn new(socket_path: PathBuf) -> Result<Self> {
-        // Remove existing socket if it exists and is actually a socket
-        if socket_path.exists() {
-            let metadata = std::fs::metadata(&socket_path).with_context(|| {
-                format!("Failed to get metadata for: {}", socket_path.display())
-            })?;
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::FileTypeExt;
-                if metadata.file_type().is_socket() {
-                    std::fs::remove_file(&socket_path).with_context(|| {
-                        format!(
-                            "Failed to remove existing socket: {}",
-                            socket_path.display()
-                        )
-                    })?;
-                } else {
-                    anyhow::bail!("Path exists but is not a socket: {}", socket_path.display());
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
-                std::fs::remove_file(&socket_path).with_context(|| {
-                    format!(
-                        "Failed to remove existing socket: {}",
-                        socket_path.display()
-                    )
-                })?;
-            }
-        }
-
-        Ok(Self {
-            socket_path,
-            listener: None,
-        })
-    }
-
-    pub async fn bind(&mut self) -> Result<()> {
-        let listener = UnixListener::bind(&self.socket_path)
-            .with_context(|| format!("Failed to bind to socket: {}", self.socket_path.display()))?;
-
-        tracing::info!("Daemon listening on: {}", self.socket_path.display());
-        self.listener = Some(listener);
-
-        Ok(())
-    }
-
-    pub async fn run(&mut self, command_tx: mpsc::Sender<DaemonCommand>) -> Result<()> {
-        let listener = self
-            .listener
-            .as_ref()
-            .context("Server not bound - call bind() first")?;
-
-        loop {
-            match listener.accept().await {
-                Ok((stream, _addr)) => {
-                    let command_tx = command_tx.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = handle_client(stream, command_tx).await {
-                            tracing::error!("Error handling client: {}", e);
-                        }
-                    });
-                }
-                Err(e) => {
-                    tracing::error!("Error accepting connection: {}", e);
-                }
-            }
-        }
-    }
-}
-
-impl Drop for DaemonServer {
-    fn drop(&mut self) {
-        if self.socket_path.exists() {
-            // Check if it's actually a socket before removing
-            if let Ok(metadata) = std::fs::metadata(&self.socket_path) {
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::FileTypeExt;
-                    if metadata.file_type().is_socket() {
-                        if let Err(e) = std::fs::remove_file(&self.socket_path) {
-                            tracing::error!("Failed to remove socket file: {}", e);
-                        }
-                    } else {
-                        tracing::warn!(
-                            "Path exists but is not a socket, not removing: {}",
-                            self.socket_path.display()
-                        );
-                    }
-                }
-
-                #[cfg(not(unix))]
-                {
-                    if let Err(e) = std::fs::remove_file(&self.socket_path) {
-                        tracing::error!("Failed to remove socket file: {}", e);
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn handle_client(
-    mut stream: UnixStream,
+struct ControlInterface {
     command_tx: mpsc::Sender<DaemonCommand>,
-) -> Result<()> {
-    let (reader, mut writer) = stream.split();
-    let mut reader = BufReader::new(reader);
-    let mut line = String::new();
+}
 
-    while reader.read_line(&mut line).await? > 0 {
-        let command_str = line.trim();
+impl ControlInterface {
+    async fn send(&self, command: DaemonCommand) -> zbus::fdo::Result<()> {
+        self.command_tx
+            .send(command)
+            .await
+            .map_err(|_| zbus::fdo::Error::Failed("daemon is shutting down".to_owned()))
+    }
+}
 
-        // Try to parse as JSON
-        match serde_json::from_str::<DaemonCommand>(command_str) {
-            Ok(command) => {
-                tracing::info!("Received command: {:?}", command);
+#[zbus::interface(name = "com.sw1nn.stentor.Control")]
+impl ControlInterface {
+    /// Start a transcription session.
+    ///
+    /// An empty `source` uses the configured or PulseAudio default source.
+    #[zbus(name = "Start")]
+    async fn start(
+        &self,
+        unmute_source: bool,
+        source: String,
+        multi_slot_handler: String,
+        ptt: bool,
+    ) -> zbus::fdo::Result<()> {
+        let multi_slot_handler =
+            multi_slot_handler
+                .parse()
+                .map_err(|error: MultiSlotHandlerParseError| {
+                    zbus::fdo::Error::InvalidArgs(error.to_string())
+                })?;
 
-                // Send command to main loop
-                if command_tx.send(command.clone()).await.is_err() {
-                    tracing::error!("Failed to send command (receiver dropped)");
-                    writer.write_all(b"ERROR: daemon shutting down\n").await?;
-                    break;
-                }
-
-                // Send response
-                use DaemonCommand::*;
-                let response = match command {
-                    Start { .. } => "OK: started\n",
-                    Stop { .. } => "OK: stopped\n",
-                    PttUp => "OK: released\n",
-                    Status => "OK: running\n",
-                    Quit => {
-                        writer.write_all(b"OK: quitting\n").await?;
-                        break;
-                    }
-                };
-
-                writer.write_all(response.as_bytes()).await?;
-            }
-            Err(e) => {
-                tracing::warn!("Failed to parse command '{}': {}", command_str, e);
-                writer
-                    .write_all(format!("ERROR: invalid command: {}\n", e).as_bytes())
-                    .await?;
-            }
-        }
-
-        line.clear();
+        self.send(DaemonCommand::Start {
+            unmute_source,
+            source: (!source.is_empty()).then_some(source),
+            multi_slot_handler,
+            ptt,
+        })
+        .await
     }
 
-    Ok(())
+    /// Stop recording. Without an explicit slot, sends to the focused
+    /// multi-slot destination, all active destinations, or the default output.
+    #[zbus(name = "Stop")]
+    async fn stop(&self) -> zbus::fdo::Result<()> {
+        self.send(DaemonCommand::Stop { command_slot: None }).await
+    }
+
+    /// Stop recording and send the transcription to a specific slot.
+    #[zbus(name = "StopAtSlot")]
+    async fn stop_at_slot(&self, command_slot: u32) -> zbus::fdo::Result<()> {
+        let command_slot = usize::try_from(command_slot)
+            .map_err(|_| zbus::fdo::Error::InvalidArgs(format!("invalid slot {command_slot}")))?;
+        self.send(DaemonCommand::Stop {
+            command_slot: Some(command_slot),
+        })
+        .await
+    }
+
+    /// Release the push-to-talk key.
+    #[zbus(name = "PttUp")]
+    async fn ptt_up(&self) -> zbus::fdo::Result<()> {
+        self.send(DaemonCommand::PttUp).await
+    }
+
+    /// Liveness check: replies when the daemon is reachable on the bus.
+    #[zbus(name = "Status")]
+    async fn status(&self) -> String {
+        "running".to_owned()
+    }
+
+    /// Ask the daemon to exit.
+    #[zbus(name = "Quit")]
+    async fn quit(&self) -> zbus::fdo::Result<()> {
+        self.send(DaemonCommand::Quit).await
+    }
+}
+
+/// Publish the control interface on the session bus.
+///
+/// The returned connection owns the bus name. Keep it alive for as long as the
+/// daemon should be reachable.
+pub async fn serve(command_tx: mpsc::Sender<DaemonCommand>) -> Result<zbus::Connection> {
+    let connection = zbus::connection::Builder::session()
+        .name(BUS_NAME)
+        .allow_name_replacements(false)
+        .replace_existing_names(false)
+        .serve_at(OBJECT_PATH, ControlInterface { command_tx })
+        .build()
+        .await
+        .with_context(|| format!("Failed to start D-Bus service {BUS_NAME} at {OBJECT_PATH}"))?;
+
+    tracing::info!(
+        bus_name = BUS_NAME,
+        object_path = OBJECT_PATH,
+        "Daemon control interface ready"
+    );
+
+    Ok(connection)
 }
 
 #[cfg(test)]
@@ -209,195 +183,102 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_command_serialization() {
-        // Test Start with no options
-        let cmd = DaemonCommand::Start {
-            unmute_source: false,
-            source: None,
-            multi_slot_handler: MultiSlotHandler::None,
-            ptt: false,
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        // Test Start with unmute_source
-        let cmd = DaemonCommand::Start {
-            unmute_source: true,
-            source: None,
-            multi_slot_handler: MultiSlotHandler::None,
-            ptt: false,
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        // Test Start with source (including spaces)
-        let cmd = DaemonCommand::Start {
-            unmute_source: false,
-            source: Some("USB Condenser Microphone".to_string()),
-            multi_slot_handler: MultiSlotHandler::None,
-            ptt: false,
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        // Test Start with Kitty handler
-        let cmd = DaemonCommand::Start {
-            unmute_source: true,
-            source: Some("HD-Audio Generic".to_string()),
-            multi_slot_handler: MultiSlotHandler::Kitty,
-            ptt: false,
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        // Test Stop with different slots
-        let cmd = DaemonCommand::Stop {
-            command_slot: Some(0),
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        let cmd = DaemonCommand::Stop {
-            command_slot: Some(2),
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-        assert_eq!(cmd, parsed);
-
-        // Test other commands
-        let commands = vec![DaemonCommand::Status, DaemonCommand::Quit];
-
-        for cmd in commands {
-            let json = serde_json::to_string(&cmd).unwrap();
-            let parsed: DaemonCommand = serde_json::from_str(&json).unwrap();
-            assert_eq!(cmd, parsed);
-        }
-    }
-
-    #[test]
-    fn test_multi_slot_handler_default() {
-        assert_eq!(MultiSlotHandler::default(), MultiSlotHandler::None);
-    }
-
-    #[test]
-    fn test_multi_slot_handler_serialization() {
-        let none = MultiSlotHandler::None;
-        let json = serde_json::to_string(&none).unwrap();
-        assert_eq!(json, r#""none""#);
-        let parsed: MultiSlotHandler = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, MultiSlotHandler::None);
-
-        let kitty = MultiSlotHandler::Kitty;
-        let json = serde_json::to_string(&kitty).unwrap();
-        assert_eq!(json, r#""kitty""#);
-        let parsed: MultiSlotHandler = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed, MultiSlotHandler::Kitty);
-    }
-
-    #[test]
-    fn test_daemon_command_json_format() {
-        let cmd = DaemonCommand::Start {
-            unmute_source: false,
-            source: None,
-            multi_slot_handler: MultiSlotHandler::None,
-            ptt: false,
-        };
-        let json = serde_json::to_string(&cmd).unwrap();
-        assert!(json.contains(r#""type":"start""#));
-        assert!(json.contains(r#""unmute_source":false"#));
-    }
-
-    #[test]
-    fn test_daemon_command_stop_default_slot() -> Result<()> {
-        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"stop"}"#)?;
-        assert_eq!(cmd, DaemonCommand::Stop { command_slot: None });
-        Ok(())
-    }
-
-    #[test]
-    fn test_daemon_command_stop_explicit_slot_zero() -> Result<()> {
-        // Older clients always send command_slot, so 0 must keep meaning slot 0.
-        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"stop","command_slot":0}"#)?;
+    fn test_multi_slot_handler_parse() -> Result<()> {
+        assert_eq!("none".parse::<MultiSlotHandler>()?, MultiSlotHandler::None);
         assert_eq!(
-            cmd,
-            DaemonCommand::Stop {
-                command_slot: Some(0)
-            }
+            "kitty".parse::<MultiSlotHandler>()?,
+            MultiSlotHandler::Kitty
         );
         Ok(())
     }
 
     #[test]
-    fn test_daemon_command_ptt_up_json_name() -> Result<()> {
-        let json = serde_json::to_string(&DaemonCommand::PttUp)?;
-        assert_eq!(json, r#"{"type":"ptt-up"}"#);
+    fn test_multi_slot_handler_parse_rejects_unknown() {
+        let result = "tmux".parse::<MultiSlotHandler>();
+        let Err(error) = result else {
+            panic!("expected an unknown handler error");
+        };
+        assert_eq!(
+            error.to_string(),
+            "unknown multi-slot handler 'tmux' (expected 'none' or 'kitty')"
+        );
+    }
 
-        let cmd: DaemonCommand = serde_json::from_str(r#"{"type":"ptt-up"}"#)?;
-        assert_eq!(cmd, DaemonCommand::PttUp);
+    #[test]
+    fn test_multi_slot_handler_display_round_trip() -> Result<()> {
+        for handler in [MultiSlotHandler::None, MultiSlotHandler::Kitty] {
+            let parsed = handler.to_string().parse::<MultiSlotHandler>()?;
+            assert_eq!(parsed, handler);
+        }
         Ok(())
     }
 
     #[test]
-    fn test_daemon_command_status_and_quit() {
-        let status = DaemonCommand::Status;
-        let quit = DaemonCommand::Quit;
-
-        let json_status = serde_json::to_string(&status).unwrap();
-        let json_quit = serde_json::to_string(&quit).unwrap();
-
-        assert!(json_status.contains(r#""type":"status""#));
-        assert!(json_quit.contains(r#""type":"quit""#));
+    fn test_dbus_names_are_valid() {
+        assert!(zbus::names::BusName::try_from(BUS_NAME).is_ok());
+        assert!(zbus::names::InterfaceName::try_from(INTERFACE_NAME).is_ok());
+        assert!(zbus::ObjectPath::try_from(OBJECT_PATH).is_ok());
     }
 
-    #[test]
-    fn test_daemon_command_parsing_from_json() {
-        // Test Start command with minimal JSON
-        let json = r#"{"type":"start"}"#;
-        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
-        match cmd {
-            DaemonCommand::Start {
-                unmute_source,
-                source,
-                multi_slot_handler,
-                ptt,
-            } => {
-                assert!(!unmute_source); // default false
-                assert!(source.is_none()); // default none
-                assert_eq!(multi_slot_handler, MultiSlotHandler::None); // default none
-                assert!(!ptt); // default false
-            }
-            _ => panic!("Expected Start command"),
-        }
+    #[tokio::test]
+    async fn test_stop_sends_command() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(1);
+        let interface = ControlInterface { command_tx: tx };
 
-        // Test Start command with all fields
-        let json = r##"{"type":"start","unmute_source":true,"source":"my-mic","multi_slot_handler":"kitty","ptt":true}"##;
-        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
-        match cmd {
-            DaemonCommand::Start {
-                unmute_source,
-                source,
-                multi_slot_handler,
-                ptt,
-            } => {
-                assert!(unmute_source);
-                assert_eq!(source, Some("my-mic".to_string()));
-                assert_eq!(multi_slot_handler, MultiSlotHandler::Kitty);
-                assert!(ptt);
-            }
-            _ => panic!("Expected Start command"),
-        }
+        interface.stop().await?;
 
-        // Test Stop command with slot
-        let json = r#"{"type":"stop","command_slot":3}"#;
-        let cmd: DaemonCommand = serde_json::from_str(json).unwrap();
-        match cmd {
-            DaemonCommand::Stop { command_slot } => assert_eq!(command_slot, Some(3)),
-            _ => panic!("Expected Stop command"),
-        }
+        assert_eq!(rx.try_recv()?, DaemonCommand::Stop { command_slot: None });
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stop_at_slot_sends_command() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(1);
+        let interface = ControlInterface { command_tx: tx };
+
+        interface.stop_at_slot(3).await?;
+
+        assert_eq!(
+            rx.try_recv()?,
+            DaemonCommand::Stop {
+                command_slot: Some(3)
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_start_maps_empty_source_to_none() -> Result<()> {
+        let (tx, mut rx) = mpsc::channel(1);
+        let interface = ControlInterface { command_tx: tx };
+
+        interface
+            .start(false, String::new(), "kitty".to_owned(), false)
+            .await?;
+
+        assert_eq!(
+            rx.try_recv()?,
+            DaemonCommand::Start {
+                unmute_source: false,
+                source: None,
+                multi_slot_handler: MultiSlotHandler::Kitty,
+                ptt: false,
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_send_reports_closed_channel() {
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx);
+        let interface = ControlInterface { command_tx: tx };
+
+        let result = interface.stop().await;
+
+        assert!(matches!(
+            result,
+            Err(zbus::fdo::Error::Failed(message)) if message == "daemon is shutting down"
+        ));
     }
 }

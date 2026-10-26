@@ -104,9 +104,6 @@ pub const TRANSCRIPTION_LAG: f32 = 1.0;
 /// disable.
 pub const PRE_ROLL_DURATION: f32 = 0.3;
 
-/// Default Unix socket filename.
-pub const SOCKET_NAME: &str = "stentor.sock";
-
 /// Default Kitty base background color.
 pub const KITTY_BASE_BACKGROUND: &str = "#1e1e2e";
 
