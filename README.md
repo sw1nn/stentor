@@ -437,6 +437,12 @@ Ensure PulseAudio is running and the microphone is not muted:
 pactl list sources short
 ```
 
+When the selected source is a virtual microphone (for example EasyEffects), the
+dialog also shows the physical device that feeds it, e.g. `USB Condenser
+Microphone Mono → Easy Effects Source`. That lookup reads the PipeWire link
+graph with `pw-dump`, which ships with PipeWire; on a PulseAudio-only system the
+label falls back to the source description.
+
 ### Transcription too slow
 
 First, ensure GPU acceleration is enabled (see [Performance](#performance) section). Without GPU offloading, transcription will be very slow.

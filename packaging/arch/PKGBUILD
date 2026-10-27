@@ -7,6 +7,7 @@ arch=('x86_64')
 url="https://code.sw1nn.net/sw1nn/stentor"
 license=('GPL-3.0-or-later')
 depends=('gtk4' 'gtk4-layer-shell' 'libadwaita' 'fontconfig' 'libpulse' 'vulkan-icd-loader')
+optdepends=('pipewire: show the physical microphone behind a virtual source')
 makedepends=('cargo' 'git' 'clang' 'cmake' 'vulkan-headers' 'shaderc')
 options=('!lto' '!debug')
 conflicts=('sw1nn-transcription' 'sw1nn-transcription-git')

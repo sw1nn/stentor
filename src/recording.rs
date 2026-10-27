@@ -66,9 +66,14 @@ pub enum UIMessage {
     AutoSendText(String, Option<usize>), // Auto-send text (text, slot); None = default target
     SetDestinations(Vec<crate::dialog::DestinationSlot>), // Update destination slots
     StoreHandlerWindowIds(Vec<u64>),     // Store window IDs managed by handler
-    /// Set the microphone description shown in the UI. Looked up off the
-    /// critical path so capture can start immediately.
-    SetSourceInfo(String),
+    /// Set the microphone label shown in the UI. The label is the source
+    /// description, prefixed with the physical device when the source is
+    /// virtual. `is_default` selects the dimmed colour for a source that was
+    /// not chosen explicitly.
+    SetSourceInfo {
+        label: String,
+        is_default: bool,
+    },
     CloseImmediately, // Close dialog immediately (for stop-and-send, cleanup happens later)
     Close,
 }

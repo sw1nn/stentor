@@ -1,7 +1,7 @@
 use gtk4::prelude::*;
 use gtk4::{
     Application, Box, Button, DeleteType, Label, LevelBar, MovementStep, Orientation,
-    ScrolledWindow, Spinner, TextView, Window, gdk, glib,
+    ScrolledWindow, Spinner, TextView, Window, gdk, glib, pango,
 };
 use gtk4_layer_shell::{KeyboardMode, Layer, LayerShell};
 use parking_lot::Mutex;
@@ -293,12 +293,16 @@ impl TranscriptionDialog {
         hold_label.set_visible(false);
         status_box.append(&hold_label);
 
-        // Microphone info label (right-aligned in status bar)
+        // Microphone info label (right-aligned in status bar). The label can
+        // carry a physical device name plus a virtual source name, so cap its
+        // width instead of letting it widen the dialog.
         let mic_label = Label::new(None);
         mic_label
             .set_markup("<small><span foreground='#888888'>Detecting source...</span></small>");
         mic_label.set_xalign(1.0); // Right align
         mic_label.set_hexpand(true);
+        mic_label.set_ellipsize(pango::EllipsizeMode::End);
+        mic_label.set_max_width_chars(48);
         status_box.append(&mic_label);
 
         main_box.append(&status_box);
@@ -870,35 +874,15 @@ impl TranscriptionDialog {
         }
     }
 
-    pub fn set_source_info(&self, device_name: &str) {
-        // Check if device name starts with "default"
-        let is_default = device_name.to_lowercase().starts_with("default");
-
-        // Extract just the description part if it's formatted as "default (Description)"
-        let display_name = if is_default {
-            if let Some(start) = device_name.find('(') {
-                if let Some(end) = device_name.find(')') {
-                    if start < end {
-                        &device_name[start + 1..end]
-                    } else {
-                        device_name
-                    }
-                } else {
-                    device_name
-                }
-            } else {
-                device_name
-            }
-        } else {
-            device_name
-        };
-
-        // Use grey color for default devices, white for explicitly chosen ones
+    pub fn set_source_info(&self, label: &str, is_default: bool) {
+        // Grey marks the source the server resolved; white marks one that was
+        // chosen explicitly. The label is escaped because a device
+        // description can contain markup characters such as '&'.
         let color = if is_default { "#888888" } else { "#FFFFFF" };
+        let label = glib::markup_escape_text(label);
 
         self.mic_label.set_markup(&format!(
-            "<small><span foreground='{}'>🎙️ {}</span></small>",
-            color, display_name
+            "<small><span foreground='{color}'>🎙️ {label}</span></small>"
         ));
     }
 

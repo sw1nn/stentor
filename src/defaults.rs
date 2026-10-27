@@ -47,6 +47,15 @@ pub const KITTY_SOCKET_TIMEOUT: Duration = Duration::from_secs(2);
 /// Delay before closing dialog after showing error message.
 pub const ERROR_DISPLAY_DURATION: Duration = Duration::from_secs(2);
 
+/// How many times the microphone label is refined from the PipeWire link graph.
+/// A virtual source only shows its input while a stream is connected, so the
+/// first attempts can run before the graph has the chain. Measured link time is
+/// under 200 ms.
+pub const SOURCE_CHAIN_ATTEMPTS: usize = 6;
+
+/// Interval between link-graph refinement attempts.
+pub const SOURCE_CHAIN_RETRY_INTERVAL: Duration = Duration::from_millis(250);
+
 // =============================================================================
 // Slot Images
 // =============================================================================

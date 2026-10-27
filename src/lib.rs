@@ -12,5 +12,6 @@ pub mod ptt;
 pub mod pulse;
 pub mod recording;
 pub mod slot_images;
+pub mod source_chain;
 pub mod source_mute;
 pub mod transcription;

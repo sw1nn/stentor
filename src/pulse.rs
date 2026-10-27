@@ -175,19 +175,30 @@ impl PulseManager {
         .unwrap_or(false)
     }
 
-    /// A human-readable microphone name for the UI, resolving the default
-    /// source when `source` is `None`.
-    pub fn device_name(&self, source: Option<&str>) -> String {
+    /// The source stentor records from, with its human-readable description.
+    ///
+    /// `source` is a source name; when it is `None` the server default is used.
+    /// Returns `None` when neither can be determined.
+    pub fn resolve_source(&self, source: Option<&str>) -> Option<ResolvedSource> {
         let name = match source {
             Some(name) => name.to_owned(),
-            None => match self.default_source_name() {
-                Some(name) => name,
-                None => return "Default".to_owned(),
-            },
+            None => self.default_source_name()?,
         };
-        self.source_description(&name)
-            .unwrap_or_else(|| "Default".to_owned())
+        let description = self
+            .source_description(&name)
+            .unwrap_or_else(|| name.clone());
+
+        Some(ResolvedSource { name, description })
     }
+}
+
+/// A resolved audio source and the description to show for it.
+#[derive(Debug, Clone)]
+pub struct ResolvedSource {
+    /// PulseAudio source name, for graph lookups.
+    pub name: String,
+    /// PulseAudio description, falling back to the name.
+    pub description: String,
 }
 
 /// Create and connect a context. Locking is required before touching a context

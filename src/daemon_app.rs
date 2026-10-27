@@ -23,7 +23,53 @@ use crate::pulse::PulseManager;
 use crate::recording::{
     RecordingSession, UIMessage, execute_output_command, start_recording_session,
 };
+use crate::source_chain;
 use crate::transcription::Transcriber;
+
+/// Send the dialog's microphone label: the source description first, then a
+/// refinement that names the physical device when the source is virtual.
+///
+/// The PipeWire link graph only shows a virtual source's input while a stream
+/// is connected, so the refinement retries briefly after capture has started.
+/// If the graph never resolves the chain, the description stands, which is the
+/// same label the dialog showed before.
+fn report_source_info(ui_tx: &Sender<UIMessage>, pulse: &PulseManager, source: Option<&str>) {
+    let is_default = source.is_none();
+    let Some(resolved) = pulse.resolve_source(source) else {
+        let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo {
+            label: "Default".to_owned(),
+            is_default,
+        });
+        return;
+    };
+
+    let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo {
+        label: resolved.description.clone(),
+        is_default,
+    });
+
+    for _ in 0..defaults::SOURCE_CHAIN_ATTEMPTS {
+        // Wait before the first attempt: the record stream has to connect
+        // before PipeWire links the virtual source's input.
+        thread::sleep(defaults::SOURCE_CHAIN_RETRY_INTERVAL);
+
+        if let Some(chain) = source_chain::resolve(&resolved.name) {
+            if !chain.source_is_virtual {
+                return;
+            }
+            if let Some(physical) = chain.physical {
+                let label = format!("{physical} → {}", resolved.description);
+                let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo { label, is_default });
+                return;
+            }
+        }
+    }
+
+    tracing::debug!(
+        source = resolved.name,
+        "link graph never resolved the source chain"
+    );
+}
 
 /// Show a desktop notification so text sent to a slot without a window is not silently lost.
 fn notify_undelivered(app: &Application, slot: usize, text: &str) {
@@ -261,17 +307,16 @@ pub async fn run(
                             async_channel::bounded::<UIMessage>(defaults::UI_MESSAGE_CHANNEL_CAPACITY);
                         *current_ui_tx_clone.borrow_mut() = Some(ui_tx.clone());
 
-                        // Resolve the microphone description off the critical path.
-                        // This may involve a PulseAudio round trip; doing it here
-                        // would delay both the visible dialog and the start of
-                        // capture.
+                        // Resolve the microphone label off the critical path.
+                        // This may involve PulseAudio and PipeWire round trips;
+                        // doing it here would delay both the visible dialog and
+                        // the start of capture.
                         {
                             let ui_tx = ui_tx.clone();
                             let pulse = Arc::clone(&pulse);
                             let source = source.clone();
                             thread::spawn(move || {
-                                let name = pulse.device_name(source.as_deref());
-                                let _ = ui_tx.send_blocking(UIMessage::SetSourceInfo(name));
+                                report_source_info(&ui_tx, &pulse, source.as_deref());
                             });
                         }
 
@@ -344,8 +389,8 @@ pub async fn run(
                                     SetTextPreview(text) => {
                                         dialog_for_updates.set_text_preview(&text);
                                     }
-                                    SetSourceInfo(name) => {
-                                        dialog_for_updates.set_source_info(&name);
+                                    SetSourceInfo { label, is_default } => {
+                                        dialog_for_updates.set_source_info(&label, is_default);
                                     }
                                     SetConfirmedAndPreview(confirmed, preview) => {
                                         dialog_for_updates
