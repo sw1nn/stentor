@@ -2,6 +2,14 @@
 All notable changes to this project will be documented in this file. See [conventional commits](https://www.conventionalcommits.org/) for commit guidelines.
 
 - - -
+## v0.39.0 - 2026-10-28
+#### Features
+- (**dialog**) name the physical microphone behind a virtual source - (2ae51a1) - Neale Swinnerton
+#### Refactoring
+- <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**dbus**) rename bus name and application id to CamelCase - (4d47120) - Neale Swinnerton
+
+- - -
+
 ## v0.38.0 - 2026-10-26
 #### Features
 - <span style="background-color: #d73a49; color: white; padding: 2px 6px; border-radius: 3px; font-weight: bold; font-size: 0.85em;">BREAKING</span>(**daemon**) replace unix socket control with D-Bus - (6271bd1) - Neale Swinnerton
